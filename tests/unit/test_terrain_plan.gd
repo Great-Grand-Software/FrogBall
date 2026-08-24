@@ -1,13 +1,14 @@
 extends GutTest
 
-## Tests for the endless terrain.
+## Tests for TerrainPlan, the climbing shaft.
 ##
-## The guardrail matters more than the shape here. An endless runner that leaks
-## one segment per span is fine in review and dead after ten minutes, so the
-## ring buffer's ceiling is asserted directly rather than trusted.
+## Note what is asserted: the guardrails and the reachability, not the scenery.
+## That the ring buffer cannot grow matters more than any particular ledge, and
+## that a ledge is always reachable matters more than that it looks varied — a
+## generator that can emit an unclearable tier ends runs for reasons the player
+## cannot see, which is the worst kind of bug in a game with no tutorial.
 
-const A_SEED: int = 20260824
-const FAR: float = 400000.0
+const A_PINNED_SEED: int = 4242
 
 var _tuning: LevelTuning
 var _plan: TerrainPlan
@@ -16,126 +17,103 @@ var _plan: TerrainPlan
 func before_each() -> void:
 	_tuning = LevelTuning.new()
 	_plan = TerrainPlan.new(_tuning, Vector2.ZERO)
-	_plan.reset(A_SEED)
+	_plan.reset(A_PINNED_SEED)
 
 
-# --- the guardrail ---------------------------------------------------------
+## Drives generation the way the screen does — once per frame — because a
+## single call is deliberately capped so it can never hang.
+func _advance_to(target_y: float) -> void:
+	for _tick: int in range(6):
+		_plan.advance_above(target_y)
 
 
-func test_segment_count_never_exceeds_the_cap() -> void:
-	for step: int in range(400):
-		_plan.advance_to(float(step) * 500.0)
+func test_a_fresh_shaft_starts_with_a_floor() -> void:
+	assert_eq(_plan.segment_count(), 1, "just the floor")
+	assert_almost_eq(_plan.segment_start(0).y, 0.0, 0.01, "the floor is at the origin")
+
+
+func test_the_ledge_count_never_exceeds_the_ring_buffer() -> void:
+	# The guardrail that makes an endless climb safe: the oldest ledge is
+	# overwritten by construction, so nothing accumulates.
+	for step: int in range(200):
+		_plan.advance_above(float(-step) * 400.0)
 		assert_lte(
-			_plan.segment_count(),
-			TerrainPlan.MAX_SEGMENTS,
-			"segments stay capped at step %d" % step
+			_plan.segment_count(), TerrainPlan.MAX_SEGMENTS, "at most MAX_SEGMENTS live"
 		)
 
 
-func test_the_cap_is_a_named_constant_under_the_node_ceiling() -> void:
-	# One collision polygon per segment, so this constant is the terrain's whole
-	# contribution to the 64-node ceiling in CLAUDE.md section 4.
-	assert_lt(TerrainPlan.MAX_SEGMENTS, 64, "the pool cannot breach the node ceiling")
+func test_advance_above_always_terminates() -> void:
+	# Bounded per call, so even an absurd target cannot hang a CI runner.
+	_plan.advance_above(-1_000_000.0)
+	assert_lte(_plan.segment_count(), TerrainPlan.MAX_SEGMENTS, "capped rather than looping")
 
 
-func test_advancing_terminates_even_for_an_absurd_target() -> void:
-	# The loop is capped per call, so this returns rather than hanging a runner.
-	_plan.advance_to(FAR)
-	assert_lte(_plan.segment_count(), TerrainPlan.MAX_SEGMENTS, "still capped")
-	assert_lt(_plan.frontier_x(), FAR, "one call does not try to build it all")
+func test_the_shaft_climbs() -> void:
+	# Each call is capped at MAX_SPANS_PER_ADVANCE so it cannot hang, which is
+	# why this drives it repeatedly the way the screen does, once per frame.
+	for _tick: int in range(5):
+		_plan.advance_above(-3000.0)
+	assert_lt(_plan.frontier_y(), -3000.0, "built past the target, upward")
 
 
-func test_repeated_advancing_does_reach_a_far_target() -> void:
-	for _step: int in range(200):
-		_plan.advance_to(20000.0)
-	assert_gt(_plan.frontier_x(), 20000.0, "called in a loop, it gets there")
-
-
-# --- the shape of a run ----------------------------------------------------
-
-
-func test_the_same_seed_builds_the_same_terrain() -> void:
-	_plan.advance_to(12000.0)
-	var first: Vector2 = _plan.segment_start(0)
-	var last: Vector2 = _plan.segment_end(_plan.segment_count() - 1)
-
-	var other := TerrainPlan.new(_tuning, Vector2.ZERO)
-	other.reset(A_SEED)
-	other.advance_to(12000.0)
-
-	assert_eq(other.segment_start(0), first, "same seed, same first live segment")
-	assert_eq(other.segment_end(other.segment_count() - 1), last, "and same frontier")
-
-
-func test_the_run_opens_on_an_unbroken_runway() -> void:
-	# The first thing a player meets should be a roll they can feel, not a hole.
-	var opening: Vector2 = _plan.segment_end(0)
-	assert_almost_eq(
-		opening.x - _plan.segment_start(0).x,
-		_tuning.start_runway_behind + _tuning.start_runway_length,
-		1.0,
-		"the opening span covers the runway both sides of the spawn"
-	)
-	assert_almost_eq(opening.y, _plan.start_point().y, 0.01, "and it is flat")
-
-
-func test_the_runway_extends_behind_the_spawn_point() -> void:
-	# An opening tap is usually mistimed, and a mistimed one on a standing frog
-	# can genuinely launch it backward. Landing on ground teaches the player
-	# something; dropping off the back of the world does not.
-	assert_lte(
-		_plan.segment_start(0).x,
-		_plan.start_point().x - _tuning.start_runway_behind + 1.0,
-		"there is ground behind the frog to land on"
-	)
-
-
-func test_the_terrain_contains_gaps_that_must_be_jumped() -> void:
-	_plan.advance_to(12000.0)
-	var gaps: int = 0
+func test_ledges_are_stacked_in_ascending_order() -> void:
+	_advance_to(-2500.0)
 	for index: int in range(1, _plan.segment_count()):
-		if _plan.segment_start(index).x - _plan.segment_end(index - 1).x > 1.0:
-			gaps += 1
-	assert_gt(gaps, 0, "a level with no gaps never asks for a jump")
-
-
-func test_the_surface_stays_inside_the_drift_limit() -> void:
-	for _step: int in range(200):
-		_plan.advance_to(_plan.frontier_x() + 4000.0)
-		for index: int in range(_plan.segment_count()):
-			var height: float = absf(_plan.segment_start(index).y - _plan.start_point().y)
-			assert_lte(height, _tuning.vertical_drift_limit + 1.0, "no runaway climb or dive")
-
-
-func test_a_flat_only_mix_produces_a_continuous_surface() -> void:
-	# Proves the weights actually steer generation, so tuning them is real.
-	_tuning.weight_downhill = 0.0
-	_tuning.weight_uphill = 0.0
-	_tuning.weight_gap_step = 0.0
-	_tuning.weight_stairs = 0.0
-	var flat := TerrainPlan.new(_tuning, Vector2.ZERO)
-	flat.reset(A_SEED)
-	flat.advance_to(9000.0)
-	for index: int in range(flat.segment_count()):
-		assert_almost_eq(
-			flat.segment_end(index).y, flat.start_point().y, 0.01, "every span stays level"
+		assert_lt(
+			_plan.segment_start(index).y,
+			_plan.segment_start(index - 1).y,
+			"ledge %d sits above the one below it" % index
 		)
 
 
-# --- the kill plane --------------------------------------------------------
+func test_every_rise_stays_within_the_tuned_range() -> void:
+	# A rise taller than a full-power jump makes the climb impossible, and the
+	# player has no way to see that it was the level's fault rather than theirs.
+	_advance_to(-4000.0)
+	for index: int in range(1, _plan.segment_count()):
+		var rise: float = _plan.segment_start(index - 1).y - _plan.segment_start(index).y
+		assert_between(rise, _tuning.rise_min - 1.0, _tuning.rise_max + 1.0, "reachable rise")
 
 
-func test_the_kill_plane_reads_the_ground_under_the_frog() -> void:
-	_plan.advance_to(9000.0)
-	var here: Vector2 = _plan.segment_start(1)
-	var lowest: float = _plan.lowest_surface_y(here.x - 10.0, here.x + 10.0)
-	assert_gte(lowest, here.y - 0.01, "the plane sits at or below the surface there")
+func test_every_ledge_stays_inside_the_shaft() -> void:
+	_advance_to(-4000.0)
+	for index: int in range(_plan.segment_count()):
+		assert_gte(_plan.segment_start(index).x, _plan.shaft_left() - 1.0, "not through the left wall")
+		assert_lte(_plan.segment_end(index).x, _plan.shaft_right() + 1.0, "not through the right wall")
 
 
-func test_the_kill_plane_still_answers_over_a_gap() -> void:
-	# Asked about empty air, it must fall back rather than return an infinity
-	# that would make the frog immortal or kill it instantly.
-	_plan.advance_to(9000.0)
-	var beyond: float = _plan.frontier_x() + 50000.0
-	var lowest: float = _plan.lowest_surface_y(beyond, beyond + 10.0)
-	assert_true(is_finite(lowest), "always a real height")
+func test_consecutive_ledges_stay_within_lateral_reach() -> void:
+	# Vertical reach is not enough on its own: a ledge directly above but right
+	# across the shaft is just as unclearable.
+	_advance_to(-4000.0)
+	var reach: float = _tuning.shaft_width * _tuning.max_lateral_step + 1.0
+	for index: int in range(2, _plan.segment_count()):
+		var previous: float = (_plan.segment_start(index - 1).x + _plan.segment_end(index - 1).x) * 0.5
+		var current: float = (_plan.segment_start(index).x + _plan.segment_end(index).x) * 0.5
+		assert_lte(absf(current - previous), reach, "ledge %d is within reach sideways" % index)
+
+
+func test_the_same_seed_builds_the_same_shaft() -> void:
+	_advance_to(-3000.0)
+	var other := TerrainPlan.new(_tuning, Vector2.ZERO)
+	other.reset(A_PINNED_SEED)
+	for _tick: int in range(6):
+		other.advance_above(-3000.0)
+	assert_eq(other.segment_count(), _plan.segment_count(), "same ledge count")
+	for index: int in range(_plan.segment_count()):
+		assert_almost_eq(
+			other.segment_start(index).y, _plan.segment_start(index).y, 0.01, "same height"
+		)
+		assert_almost_eq(
+			other.segment_start(index).x, _plan.segment_start(index).x, 0.01, "same position"
+		)
+
+
+func test_the_lowest_live_ledge_rises_as_the_climb_goes_on() -> void:
+	# The kill plane trails this, so it has to keep up or a long climb becomes
+	# unloseable.
+	# Has to climb far enough to actually exhaust the ring: at ~275px a tier,
+	# 26 slots hold roughly 7000px before anything is recycled.
+	var early: float = _plan.lowest_surface_y()
+	_advance_to(-14000.0)
+	assert_lt(_plan.lowest_surface_y(), early, "the floor of the live window moved up")

@@ -1,13 +1,13 @@
 # Frog Ball
 
-A frog that rolls like a wheel, and one button.
+A ball that rolls like a wheel, climbing a shaft, and one button.
 
-Tap to jump. **Where the frog is in its roll when you tap decides what the jump
-does** — feet at the bottom pops you straight up, feet swung forward launches
-you along a flat, fast arc, feet up top and you whiff. **How long you hold
-decides how hard** — a flick is a hop, a full press is a full jump. Roll down a
-slope, time the press, clear the gap, land rolling, do it again. Get as far as
-you can.
+Press to jump. **Where the ball is in its roll when you press decides what the
+jump does** — arrow at the bottom sends you straight up, arrow swung forward
+throws you across the shaft on a flatter arc, arrow up top and you whiff.
+**How long you hold decides how hard** — a flick is a hop, a full press is a
+full jump. Land on a ledge, roll, time the next press, climb the next tier.
+Run into the side of the shaft and it turns you around. The score is height.
 
 Nothing in the game explains any of that, and that is the point. This is a
 prototype built to answer one question: **does the roll-timing jump read as
@@ -47,7 +47,7 @@ The import step is not optional on a clone that has never been opened: GUT's
 test run aborts with "Some GUT class_names have not been imported" instead of
 failing a test.
 
-The suite must report **62 tests passing across 6 scripts**. Do this even when
+The suite must report **62 tests passing across 7 scripts**. Do this even when
 your task looks trivial — a failure you see *after* editing is ambiguous unless
 you know the baseline was clean.
 
@@ -97,7 +97,7 @@ first run, and a cancelled run reports no failures *and* no successes.
 - **Tap / click / space** — jump. That is the entire input. Press fires it;
   keep holding for more power.
 - Falling below the terrain ends the run; it restarts on its own after a beat.
-- The only score is distance.
+- The only score is height climbed.
 
 ## Working on the feel
 
@@ -127,7 +127,7 @@ where to sit.
 scripts/game/jump_solver.gd    ← the mechanic. Pure maths, no Node, fully tested.
 scripts/game/terrain_plan.gd   ← the heightfield. Ring-buffered, so it cannot leak.
 scripts/game/frog_body.gd      ← the RigidBody2D that consumes both.
-scripts/ui/frog_ball_screen.gd ← the run: terrain nodes, camera, distance, restart.
+scripts/ui/frog_ball_screen.gd ← the run: ledges, walls, camera, height, restart.
 resources/*.tres               ← every tunable number.
 tools/tuning_probe.gd          ← headless skill-gradient probe. Not in CI.
 ```

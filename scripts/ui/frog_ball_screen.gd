@@ -1,43 +1,39 @@
 extends Node2D
 
-## The run: one frog, an endless heightfield, and a camera chasing both.
+## The run: one frog climbing a walled shaft, and a camera rising with it.
 ##
-## Deliberately silent. There is no tutorial, no hint, no prompt and no arrow —
-## the prototype's whole question is whether the roll-timing jump reads as skill
-## with nothing explained, and any hint on screen would answer that question for
-## the player instead of letting them find it. The distance readout is a score,
-## not a hint, and it is the only text the run shows.
+## Deliberately silent. There is no tutorial, no hint, no prompt and no arrow
+## pointing anywhere — the prototype's whole question is whether the roll-timing
+## jump reads as skill with nothing explained, and any hint on screen would
+## answer that question for the player. The height readout is a score, not a
+## hint, and it is the only text a run shows.
 ##
-## Terrain collision is a fixed pool of polygons reused in place; terrain
-## visuals are one _draw() over the same data. Nothing here grows with how long
-## the player survives, which is the property an endless mode most needs.
+## Ledge collision is a fixed pool reused in place and the visuals are one
+## _draw() over the same data, so nothing here grows with how high the player
+## gets — which is the property an endless climb most needs.
 
-## Collision polygons in the pool. One per live terrain segment, so this is the
-## terrain's entire contribution to the node count.
+## Collision polygons in the pool, one per live ledge. This is the shaft's
+## entire contribution to the node count.
 const TERRAIN_POLYGONS: int = TerrainPlan.MAX_SEGMENTS
 
-## Points in a terrain quad. Named so the buffer size is not a loose 4.
+## Points in a ledge quad. Named so the buffer size is not a loose 4.
 const QUAD_POINTS: int = 4
 
-## How far either side of the frog the kill plane looks for ground, px.
-const KILL_SCAN_HALF_WIDTH: float = 900.0
-
 ## Debug overlay refresh period, seconds. Slower than a frame on purpose: the
-## overlay builds a string, and nothing that runs every frame should allocate.
+## overlay builds a string, and nothing running every frame should allocate.
 const DEBUG_REFRESH_SEC: float = 0.1
 
 @export var frog_tuning: FrogTuning
 @export var level_tuning: LevelTuning
 
-## Terrain seed. 0 picks a fresh one per run, which is what shipping wants. Any
-## other value replays the same course every time, which is what tuning the jump
-## against a known ramp wants, and what the tests need to not be flaky.
+## Course seed. 0 rolls a fresh one per run; anything else pins the shaft AND
+## the frog's radius, which is what the integration tests rely on.
 @export var run_seed: int = 0
 
-## How far below the lowest nearby ground the frog may fall before the run ends,
-## px. The plane trails the terrain rather than sitting at a fixed height, so a
-## level that descends does not kill the player for descending with it.
-@export_range(100.0, 4000.0, 10.0, "or_greater") var kill_plane_margin: float = 900.0
+## How far below the lowest standing ledge the frog may fall before the run
+## ends, px. Everything under that has already been recycled, so there is
+## nothing left to land on.
+@export_range(100.0, 4000.0, 10.0, "or_greater") var fall_tolerance: float = 700.0
 
 ## Pause between death and the automatic restart, seconds.
 @export_range(0.1, 3.0, 0.05, "or_greater") var restart_delay_sec: float = 0.7
@@ -47,22 +43,20 @@ const DEBUG_REFRESH_SEC: float = 0.1
 
 ## How long it may stay stalled before the run is abandoned, seconds. A frog
 ## wedged in a corner is not a fail state the player can read, so end it.
-@export_range(0.0, 20.0, 0.5, "or_greater") var stuck_timeout_sec: float = 3.5
+@export_range(0.0, 20.0, 0.5, "or_greater") var stuck_timeout_sec: float = 4.0
 
-## Pixels per displayed metre.
+## Pixels per displayed metre of height.
 @export_range(1.0, 500.0, 1.0, "or_greater") var pixels_per_metre: float = 64.0
 
-@export_range(0.1, 4.0, 0.05, "or_greater") var camera_zoom: float = 0.85
+@export_range(0.1, 4.0, 0.05, "or_greater") var camera_zoom: float = 1.0
 
-## How far ahead the camera leads at full roll speed, px.
-@export_range(0.0, 1200.0, 10.0, "or_greater") var camera_look_ahead: float = 260.0
+## How far above the frog the camera leads, px. Generous, because in a climber
+## the thing you need to see is the ledge you are aiming at, not the one you
+## just left.
+@export_range(0.0, 1200.0, 10.0, "or_greater") var camera_look_ahead: float = 190.0
 
-@export_range(0.5, 30.0, 0.5, "or_greater") var camera_follow_speed: float = 6.0
-
-## Vertical catch-up. Slower than horizontal, or every jump swims.
-@export_range(0.5, 30.0, 0.5, "or_greater") var camera_vertical_follow_speed: float = 3.0
-
-@export_range(-600.0, 600.0, 10.0) var camera_vertical_offset: float = -60.0
+## Vertical catch-up rate, higher is snappier.
+@export_range(0.5, 30.0, 0.5, "or_greater") var camera_follow_speed: float = 5.0
 
 ## Start with the tuning overlay up. Off by default, and it must stay off for a
 ## real playtest: an overlay that draws the window is an explanation.
@@ -72,14 +66,17 @@ var _plan: TerrainPlan
 var _quad: PackedVector2Array = PackedVector2Array()
 var _polygons: Array[CollisionPolygon2D] = []
 var _run_active: bool = false
-var _synced_frontier: float = -INF
+var _synced_frontier: float = INF
 var _shown_metres: int = -1
 var _run_metres: int = 0
+var _highest_y: float = 0.0
 var _stuck_for: float = 0.0
 var _debug_elapsed: float = 0.0
 
 @onready var _frog: FrogBody = %Frog
 @onready var _terrain: StaticBody2D = %Terrain
+@onready var _left_wall: CollisionShape2D = %LeftWall
+@onready var _right_wall: CollisionShape2D = %RightWall
 @onready var _camera: Camera2D = %Camera
 @onready var _distance_label: Label = %Distance
 @onready var _debug_label: Label = %Debug
@@ -96,6 +93,7 @@ func _ready() -> void:
 	_quad.resize(QUAD_POINTS)
 	_plan = TerrainPlan.new(level_tuning, Vector2.ZERO)
 	_build_polygon_pool()
+	_build_walls()
 
 	_camera.zoom = Vector2(camera_zoom, camera_zoom)
 	_debug_label.visible = debug_overlay
@@ -106,73 +104,83 @@ func _ready() -> void:
 
 
 ## Terrain data behind the run. Exposed so tests can drive generation hard
-## without waiting for a frog to roll there.
+## without waiting for a frog to climb there.
 func terrain_plan() -> TerrainPlan:
 	return _plan
 
 
-## False once the frog has died and before the next run begins.
+## True while a run is in play, false between death and the restart.
 func is_running() -> bool:
 	return _run_active
 
 
-## Rebuilds the collision pool and the drawing from the current plan. Cheap, and
-## idempotent — it touches the same fixed set of nodes every time.
+## Rebuilds the collision pool and the drawing from the current plan. Cheap,
+## and idempotent — it touches the same fixed set of nodes every time.
 func refresh_terrain() -> void:
 	var live: int = _plan.segment_count()
+	var depth: float = maxf(level_tuning.ledge_thickness, 1.0)
 	for index: int in range(TERRAIN_POLYGONS):
 		var polygon: CollisionPolygon2D = _polygons[index]
 		if index >= live:
 			polygon.disabled = true
 			continue
-		var top_left: Vector2 = _plan.segment_start(index)
-		var top_right: Vector2 = _plan.segment_end(index)
-		var depth: float = maxf(level_tuning.ground_thickness, 1.0)
-		_quad[0] = top_left
-		_quad[1] = top_right
-		_quad[2] = top_right + Vector2(0.0, depth)
-		_quad[3] = top_left + Vector2(0.0, depth)
+		var left: Vector2 = _plan.segment_start(index)
+		var right: Vector2 = _plan.segment_end(index)
+		_quad[0] = left
+		_quad[1] = right
+		_quad[2] = right + Vector2(0.0, depth)
+		_quad[3] = left + Vector2(0.0, depth)
 		polygon.polygon = _quad
 		polygon.disabled = false
-	_synced_frontier = _plan.frontier_x()
+	_synced_frontier = _plan.frontier_y()
 	queue_redraw()
 
 
-## Starts a fresh run: new terrain, frog back on the opening runway, distance
-## back to zero.
+## Starts a fresh run: new shaft, frog back on the floor, height back to zero.
 func start_run() -> void:
-	_plan.reset(run_seed)
-	_plan.advance_to(_plan.start_point().x + level_tuning.generate_ahead)
+	_plan.reset(run_seed if run_seed != 0 else level_tuning.seed_value)
+	_plan.advance_above(_plan.start_point().y - level_tuning.generate_above)
 	refresh_terrain()
 
-	# The frog rolls its own radius, so it places itself on the surface point
-	# rather than the screen guessing how tall it is this run.
 	var spawn: Vector2 = _plan.start_point()
+	# Before the first physics frame the wall shapes still sit at the origin —
+	# which is exactly where the frog spawns — so place them now or the run
+	# starts with the frog wedged inside both of them.
+	_track_walls(spawn)
 	_frog.set_run_seed(run_seed)
 	_frog.reset_to(spawn)
-	_camera.global_position = spawn + Vector2(0.0, camera_vertical_offset - _frog.radius())
+	_camera.global_position = Vector2(spawn.x, spawn.y - camera_look_ahead)
 
+	_highest_y = spawn.y
 	_run_metres = 0
 	_stuck_for = 0.0
 	_run_active = true
-	_refresh_distance(0)
+	_refresh_height(0)
 
 
 func _draw() -> void:
 	# One pass over the same data the collision pool uses. Prefer this over a
-	# visual node per segment — see CLAUDE.md section 4.
-	var ink := Color(0.92, 0.92, 0.90)
+	# visual node per ledge — see CLAUDE.md section 4.
+	var ink := Color(0.94, 0.94, 0.92)
 	var fill := Color(0.16, 0.18, 0.17)
-	var depth: float = maxf(level_tuning.ground_thickness, 1.0)
+	var depth: float = maxf(level_tuning.ledge_thickness, 1.0)
 	for index: int in range(_plan.segment_count()):
-		var top_left: Vector2 = _plan.segment_start(index)
-		var top_right: Vector2 = _plan.segment_end(index)
-		_quad[0] = top_left
-		_quad[1] = top_right
-		_quad[2] = top_right + Vector2(0.0, depth)
-		_quad[3] = top_left + Vector2(0.0, depth)
+		var left: Vector2 = _plan.segment_start(index)
+		var right: Vector2 = _plan.segment_end(index)
+		_quad[0] = left
+		_quad[1] = right
+		_quad[2] = right + Vector2(0.0, depth)
+		_quad[3] = left + Vector2(0.0, depth)
 		draw_colored_polygon(_quad, fill)
-		draw_line(top_left, top_right, ink, 4.0)
+		draw_line(left, right, ink, 4.0)
+
+	# The walls, drawn across whatever slice of the shaft is near the frog.
+	var span: float = level_tuning.wall_span * 0.5
+	var centre_y: float = _frog.global_position.y
+	for edge: float in [_plan.shaft_left(), _plan.shaft_right()]:
+		draw_line(
+			Vector2(edge, centre_y - span), Vector2(edge, centre_y + span), ink, 3.0
+		)
 
 
 func _physics_process(delta: float) -> void:
@@ -180,14 +188,12 @@ func _physics_process(delta: float) -> void:
 		return
 
 	var here: Vector2 = _frog.global_position
-	_plan.advance_to(here.x + level_tuning.generate_ahead)
-	if not is_equal_approx(_plan.frontier_x(), _synced_frontier):
+	_plan.advance_above(here.y - level_tuning.generate_above)
+	if not is_equal_approx(_plan.frontier_y(), _synced_frontier):
 		refresh_terrain()
+	_track_walls(here)
 
-	var floor_y: float = _plan.lowest_surface_y(
-		here.x - KILL_SCAN_HALF_WIDTH, here.x + KILL_SCAN_HALF_WIDTH
-	)
-	if here.y > floor_y + kill_plane_margin:
+	if here.y > _plan.lowest_surface_y() + fall_tolerance:
 		_end_run()
 		return
 
@@ -199,9 +205,10 @@ func _physics_process(delta: float) -> void:
 	else:
 		_stuck_for = 0.0
 
-	var travelled: float = here.x - _plan.start_point().x
-	_run_metres = maxi(_run_metres, int(maxf(travelled, 0.0) / maxf(pixels_per_metre, 1.0)))
-	_refresh_distance(_run_metres)
+	_highest_y = minf(_highest_y, here.y)
+	var climbed: float = _plan.start_point().y - _highest_y
+	_run_metres = maxi(_run_metres, int(maxf(climbed, 0.0) / maxf(pixels_per_metre, 1.0)))
+	_refresh_height(_run_metres)
 
 
 func _process(delta: float) -> void:
@@ -217,9 +224,9 @@ func _unhandled_input(event: InputEvent) -> void:
 	# One button is the entire input surface: a single touch, a single left
 	# click, or space, which is a desktop convenience and never required.
 	#
-	# Press and release are BOTH meaningful. Pressing starts a charge; releasing
-	# fires the jump, reading how long it was held for power and the clock angle
-	# at that instant for direction. A flick is a hop, a full press is a launch.
+	# Press and release are BOTH meaningful. Pressing fires the jump at the
+	# angle the clock is showing right now; holding feeds in the rest of the
+	# power. A flick is a hop, a full press is a launch.
 	var pressed: bool = false
 	var is_tap: bool = false
 	if event is InputEventScreenTouch:
@@ -247,31 +254,43 @@ func _unhandled_input(event: InputEvent) -> void:
 
 func _build_polygon_pool() -> void:
 	# Created once, bounded by a named constant, and owned by this screen for
-	# the life of the scene. Nothing is spawned per segment at run time.
+	# the life of the scene. Nothing is spawned per ledge at run time.
 	for index: int in range(TERRAIN_POLYGONS):
 		var polygon := CollisionPolygon2D.new()
-		polygon.name = "Segment%02d" % index
+		polygon.name = "Ledge%02d" % index
 		polygon.disabled = true
 		_terrain.add_child(polygon)
 		_polygons.append(polygon)
 
 
-func _track_camera(delta: float) -> void:
-	var lead: float = clampf(
-		_frog.linear_velocity.x / maxf(frog_tuning.max_roll_speed, 1.0), -1.0, 1.0
-	)
-	var target: Vector2 = _frog.global_position
-	target.x += lead * camera_look_ahead
-	target.y += camera_vertical_offset
+func _build_walls() -> void:
+	# Two shapes, repositioned as the frog climbs rather than extended, so an
+	# endless run cannot grow them.
+	var thickness: float = maxf(level_tuning.wall_thickness, 1.0)
+	for shape_node: CollisionShape2D in [_left_wall, _right_wall]:
+		var box := RectangleShape2D.new()
+		box.size = Vector2(thickness, maxf(level_tuning.wall_span, 1.0))
+		shape_node.shape = box
 
-	# Exponential smoothing, so the follow feels the same at any frame rate.
+
+func _track_walls(here: Vector2) -> void:
+	var half: float = maxf(level_tuning.wall_thickness, 1.0) * 0.5
+	_left_wall.global_position = Vector2(_plan.shaft_left() - half, here.y)
+	_right_wall.global_position = Vector2(_plan.shaft_right() + half, here.y)
+
+
+func _track_camera(delta: float) -> void:
+	# Horizontally pinned to the shaft: the column is narrow enough to see
+	# whole, and a camera that slid side to side would make a vertical jump
+	# read as a diagonal one.
+	var target_y: float = _frog.global_position.y - camera_look_ahead
 	var here: Vector2 = _camera.global_position
-	here.x = lerpf(here.x, target.x, 1.0 - exp(-camera_follow_speed * delta))
-	here.y = lerpf(here.y, target.y, 1.0 - exp(-camera_vertical_follow_speed * delta))
+	here.x = _plan.start_point().x
+	here.y = lerpf(here.y, target_y, 1.0 - exp(-camera_follow_speed * delta))
 	_camera.global_position = here
 
 
-func _refresh_distance(metres: int) -> void:
+func _refresh_height(metres: int) -> void:
 	# Guarded because building the string every frame would allocate every
 	# frame, and the number only changes a few times a second.
 	if metres == _shown_metres:
@@ -283,11 +302,10 @@ func _refresh_distance(metres: int) -> void:
 func _refresh_debug() -> void:
 	# Radius is in here because it is randomised per run: when a run feels good
 	# or awful, the first thing you want to know is which frog you were riding.
-	_debug_label.text = "r %.0f   feet %+.0f deg   charge %.0f%%   speed %.0f   %s" % [
+	_debug_label.text = "r %.0f   feet %+.0f deg   charge %.0f%%   %s" % [
 		_frog.radius(),
 		_frog.feet_phase_deg(),
 		_frog.charge() * 100.0,
-		_frog.linear_velocity.length(),
 		"ground" if _frog.grounded else "air",
 	]
 
@@ -309,9 +327,8 @@ func _end_run() -> void:
 
 func _on_frog_jumped(outcome: JumpOutcome) -> void:
 	# Nothing on screen reacts to a jump on purpose — no flash, no readout, no
-	# "nice timing". The arc itself is the only feedback the player gets, which
-	# is the thing being tested. The hook exists for the debug overlay and for
-	# whatever juice survives the playtest.
+	# "nice timing". The arc itself is the only feedback, which is the thing
+	# being tested. This hook exists for the debug overlay.
 	if debug_overlay:
 		_debug_elapsed = DEBUG_REFRESH_SEC
 		if not outcome.fired:
@@ -320,4 +337,4 @@ func _on_frog_jumped(outcome: JumpOutcome) -> void:
 
 func _on_game_state_best_distance_changed(_metres: int) -> void:
 	_shown_metres = -1
-	_refresh_distance(_run_metres)
+	_refresh_height(_run_metres)

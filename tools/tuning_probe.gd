@@ -1,7 +1,7 @@
 extends SceneTree
 
 ## Headless tuning probe: plays the real scene under fixed policies and reports
-## how far each one gets.
+## how HIGH each one climbs.
 ##
 ## Not part of the game and not part of CI. It exists because the questions this
 ## prototype has to answer — does timing read as skill, and how big should the
@@ -17,8 +17,10 @@ const GAME_SCENE: String = "res://scenes/game.tscn"
 ## The seed pins the course AND the frog's radius, so runs stay comparable.
 const SEEDS: Array[int] = [11, 202, 3033, 40404, 555]
 
-## Physics steps per run: sixty seconds at the default tick.
-const MAX_STEPS: int = 3600
+## Physics steps per run: thirty seconds at the default tick. Long enough for
+## the climb to separate the policies, short enough that the whole sweep is
+## worth running after a tuning change rather than being skipped.
+const MAX_STEPS: int = 1800
 
 ## Steps a bot waits after jumping, so none of them hop continuously and all get
 ## the same chance to build speed between jumps.
@@ -50,8 +52,10 @@ func _initialize() -> void:
 	quit()
 
 
-## Does timing beat not-timing? "boost" must win by a wide margin, and "late"
-## must be punished. If that stops being true, a tuning change broke the game.
+## Does timing beat not-timing? In a climber the shape differs from the roller:
+## "neutral" (6 o'clock, straight up) is the honest climb jump, and "boost"
+## (4:30) trades height for reach across the shaft. Both must beat "never" by a
+## wide margin, and "late" must still be punished.
 func _report_policies() -> void:
 	print("== tap policy (radius randomised per seed) ==")
 	print("policy   | median m | worst  | best   | note")
@@ -88,8 +92,8 @@ func _note(policy: String) -> String:
 	match policy:
 		"never": return "baseline: no input at all"
 		"random": return "mashing"
-		"neutral": return "pressing at 6 o'clock, untimed"
-		"boost": return "pressing near 4:30 — should win by a lot"
+		"neutral": return "pressing at 6 o'clock — straight up, the climb jump"
+		"boost": return "pressing near 4:30 — the forward launch"
 		"late": return "pressing at the 3 o'clock edge — should be punished"
 	return ""
 
@@ -109,10 +113,10 @@ func _play(policy: String, run_seed: int, pinned_radius: float) -> Dictionary:
 	screen.start_run()
 
 	var frog: FrogBody = screen.get_node("%Frog")
-	var origin: float = screen.terrain_plan().start_point().x
+	var origin: float = screen.terrain_plan().start_point().y
 	var rng := RandomNumberGenerator.new()
 	rng.seed = run_seed
-	var furthest: float = 0.0
+	var highest: float = 0.0
 	var cooldown: int = 0
 	var holding: int = 0
 
@@ -130,11 +134,11 @@ func _play(policy: String, run_seed: int, pinned_radius: float) -> Dictionary:
 			holding = HOLD_STEPS
 			cooldown = TAP_COOLDOWN_STEPS + HOLD_STEPS
 		await physics_frame
-		furthest = maxf(furthest, frog.global_position.x - origin)
+		highest = maxf(highest, origin - frog.global_position.y)
 		if not screen.is_running():
 			break
 
-	var metres: float = furthest / screen.pixels_per_metre
+	var metres: float = highest / screen.pixels_per_metre
 	screen.queue_free()
 	return {"metres": metres}
 

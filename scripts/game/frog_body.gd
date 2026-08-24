@@ -19,9 +19,21 @@ signal jumped(outcome: JumpOutcome)
 ## Emitted on the frame the frog touches down after being airborne.
 signal landed
 
+## Emitted when the frog turns around against the side of the shaft.
+signal bounced
+
 ## A contact counts as ground when its normal is this close to vertical.
 ## Filters out the side of a step riser, which is a wall, not a floor.
 const GROUND_NORMAL_Y: float = -0.5
+
+## A contact counts as wall when its normal is this close to horizontal. Set
+## high on purpose: the corner of a ledge produces a diagonal normal, and
+## treating those as walls flips the frog's drive while it is simply rolling.
+const WALL_NORMAL_X: float = 0.9
+
+## How long after a bounce the frog ignores further wall contacts, seconds.
+## Without it a frog resting against a wall flips direction every frame.
+const BOUNCE_COOLDOWN_SEC: float = 0.12
 
 ## Contacts to look at per frame. A heightfield surface never needs many.
 const CONTACTS_REPORTED: int = 8
@@ -58,6 +70,8 @@ var _holding: bool = false
 var _held_for: float = 0.0
 var _thrusting: bool = false
 var _arrow_push: float = 0.0
+var _drive_dir: int = 1
+var _bounce_cooldown: float = 0.0
 var _head: PackedVector2Array = PackedVector2Array()
 var _thrust_impulse: Vector2 = Vector2.ZERO
 var _thrust_applied: float = 0.0
@@ -83,6 +97,7 @@ func _ready() -> void:
 
 	_rng.randomize()
 	_head.resize(3)
+	_drive_dir = 1 if tuning.drive_direction >= 0 else -1
 	_shape.shape = _circle
 	_apply_radius()
 
@@ -166,6 +181,7 @@ func _integrate_forces(state: PhysicsDirectBodyState2D) -> void:
 
 	var delta: float = state.step
 	var velocity: Vector2 = state.linear_velocity
+	_bounce_cooldown = maxf(_bounce_cooldown - delta, 0.0)
 	var normal: Vector2 = _read_ground(state)
 
 	if grounded:
@@ -246,6 +262,12 @@ func arrow_push() -> float:
 	return _arrow_push
 
 
+## Which way the self-drive currently points, 1 right and -1 left. Flipped only
+## by the shaft walls. Exposed for diagnostics.
+func drive_direction() -> int:
+	return _drive_dir
+
+
 ## Radius this run rolled, px.
 func radius() -> float:
 	return _radius
@@ -271,6 +293,8 @@ func reset_to(ground_point: Vector2) -> void:
 	_was_grounded = false
 	grounded = false
 	facing = 1
+	_bounce_cooldown = 0.0
+	_drive_dir = 1 if tuning.drive_direction >= 0 else -1
 
 
 ## Where the feet currently sit on the world clock, in degrees. Debug overlay
@@ -284,17 +308,39 @@ func feet_phase_deg() -> float:
 func _read_ground(state: PhysicsDirectBodyState2D) -> Vector2:
 	grounded = false
 	var normal := Vector2.UP
+	var velocity_x: float = state.linear_velocity.x
 	for index: int in range(state.get_contact_count()):
 		var candidate: Vector2 = state.get_contact_local_normal(index)
 		# Reported normals can face either way depending on which body is
-		# which, so flip to a consistent "up" before judging the angle.
-		if candidate.y > 0.0:
-			candidate = -candidate
-		if candidate.y < GROUND_NORMAL_Y:
+		# which, so each case flips them to a known direction before judging.
+		if absf(candidate.x) > WALL_NORMAL_X:
+			_bounce_off_wall(candidate, velocity_x)
+			continue
+		var upward: Vector2 = -candidate if candidate.y > 0.0 else candidate
+		if upward.y < GROUND_NORMAL_Y and not grounded:
 			grounded = true
-			normal = candidate
-			break
+			normal = upward
 	return normal
+
+
+## Turns the frog around when it runs into the side of the shaft.
+##
+## Climbing needs the frog to stay inside a column narrow enough to see, so a
+## wall reverses the self-drive rather than stopping it dead. The reversal is
+## driven by the wall, never by the frog's own velocity — the same rule that
+## keeps a mistimed hop from sending a run backwards for ever.
+func _bounce_off_wall(contact_normal: Vector2, velocity_x: float) -> void:
+	if _bounce_cooldown > 0.0 or absf(velocity_x) < 1.0:
+		return
+	# The useful normal is the one pointing away from the wall, which is the one
+	# opposing the direction the frog was travelling when it hit.
+	var away: Vector2 = contact_normal if contact_normal.x * velocity_x < 0.0 else -contact_normal
+	var next_dir: int = 1 if away.x > 0.0 else -1
+	if next_dir == _drive_dir:
+		return
+	_drive_dir = next_dir
+	_bounce_cooldown = BOUNCE_COOLDOWN_SEC
+	bounced.emit()
 
 
 ## Automatic roll: a constant drive along the surface, rolling resistance
@@ -304,8 +350,7 @@ func _read_ground(state: PhysicsDirectBodyState2D) -> Vector2:
 ## backward is then decelerated and brought back by the same term that drives it
 ## normally, instead of accelerating away from the level for ever.
 func _apply_rolling(velocity: Vector2, normal: Vector2, delta: float) -> Vector2:
-	var drive: float = 1.0 if tuning.drive_direction >= 0 else -1.0
-	var along_dir := Vector2(-normal.y, normal.x) * drive
+	var along_dir := Vector2(-normal.y, normal.x) * float(_drive_dir)
 	var before: float = velocity.dot(along_dir)
 	var along: float = before
 	if absf(along) < tuning.max_roll_speed:

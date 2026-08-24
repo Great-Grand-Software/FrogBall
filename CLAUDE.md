@@ -46,9 +46,9 @@ of **every** Godot Web build; do not relax them.
 | **No multithreading** | The Web target is single-threaded. Godot's threaded Web export needs COOP/COEP headers GitHub Pages cannot serve. Never enable `variant/thread_support`. |
 | **No 3D** | 2D only — `Control`, `Node2D`, sprites, tilemaps. |
 | **Bounded memory** | Browsers cap WebAssembly memory hard. See §4. |
-| **Fixed frame** | 1280×720 landscape, in `project.conf`. Off-shape screens get the same frame centred and letterboxed, never a responsive reflow — that is `stretch/aspect="keep"`. Landscape is load-bearing: the player has to see the run-up, the launch and the landing at once. |
+| **Fixed frame** | 720×1280 portrait, in `project.conf`. Off-shape screens get the same frame centred and letterboxed, never a responsive reflow — that is `stretch/aspect="keep"`. Portrait is load-bearing: the run climbs, so the frame has to show the tier being aimed at above the frog. |
 | **One button, and nothing else** | Tap, click, or space. Press and release both matter — press fires the jump, holding feeds in power — but it is still ONE button. No tilt, no drag, no swipe, no multi-touch, no keyboard requirement. Rolling is automatic and momentum-driven; there is no input that steers speed or direction, and adding one changes what the prototype is testing. |
-| **No tutorial, ever** | No hint text, no onboarding, no arrows, no "nice timing" feedback, no on-screen indication of where the jump window is. The prototype's entire question is whether the timing reads with nothing explained; anything that explains it answers the question for the player. The distance readout is a score, not a hint, and is the only text a run shows. |
+| **No tutorial, ever** | No hint text, no onboarding, no arrows, no "nice timing" feedback, no on-screen indication of where the jump window is. The prototype's entire question is whether the timing reads with nothing explained; anything that explains it answers the question for the player. The height readout is a score, not a hint, and is the only text a run shows. |
 | **Monochrome** | Off-white ink on near-black. Line art, no rasters. The body is a bare circle with one arrow — the arrow is the only thing on screen carrying information, and anything else drawn on the body competes with it. |
 
 ---
@@ -85,7 +85,10 @@ about whether something "looks reasonable".
 - Ceiling: **64 simultaneous nodes** under one gameplay host node. Past that,
   pool and reuse. Terrain obeys this structurally: `TerrainPlan` is a
   fixed-size ring buffer and the collision pool is sized from the same
-  constant, so an endless run cannot grow the scene.
+  constant, so an endless climb cannot grow the scene. `MAX_SEGMENTS` must
+  exceed the tiers visible at once **plus** those generated ahead — size it too
+  small and the ring recycles the ledge the frog is standing on, which reads as
+  the frog freezing in mid-air rather than as a memory bug.
 - **Prefer one `_draw()` over many nodes** for repeated visual elements. The
   terrain draws every segment in one pass, and the body draws its circle and
   arrow in one more.
@@ -205,17 +208,38 @@ because they define what the gates *mean*.
 
 ## 8. The game
 
-You are a frog that rolls like a wheel. Rolling happens on its own — down
-slopes, off landings, out of its own momentum — and you never steer it. The
-only thing you can do is tap, and **where the frog is in its roll when you tap
-is the whole game.** Picture a clock fixed to the world, not to the frog: 12 is
-up, 3 is the way you are going, 6 is the ground, 9 is behind you. The frog's
-feet ride round that clock as it spins. Tap with the feet at 6 and you hop
-straight up, keeping the speed you had. Tap later, with the feet swung toward
-3, and you launch forward on an arc with real extra power — around 4:30 that is
-a 45° launch and roughly double the ground covered. Tap in the top half and you
-whiff. The point of the prototype is to find out whether a player with no
-instructions discovers that gradient within a few seconds of failing at it.
+You are a ball that rolls like a wheel, climbing a narrow walled shaft. Rolling
+happens on its own — off landings, out of its own momentum — and you never
+steer it; run into the side of the shaft and it turns you around. The only
+thing you can do is press, and **where the ball is in its roll when you press
+is the whole game.** Picture a clock fixed to the world, not to the ball: 12 is
+up, 3 is the way you are going, 6 is the ground, 9 is behind you. The arrow
+rides round that clock as the body spins. Press with the arrow at 6 and you go
+straight up, keeping the speed you had — that is the climb jump. Press later,
+with the arrow swung toward 3, and you launch forward on an arc — around 4:30
+that is a 45° launch, which trades height for reach across the shaft. Press in
+the top half and you whiff. The point of the prototype is to find out whether a
+player with no instructions discovers that gradient within a few seconds of
+failing at it.
+
+**The run goes up, and only up.** Ledges are stacked in a column with walls
+down both sides. The score is height. Falling below the lowest live ledge ends
+the run, and there are no checkpoints.
+
+**Three numbers are locked together, and getting any of them wrong breaks the
+game rather than making it feel bad:**
+
+- `rise` must exceed the ball's **diameter**, not its radius. A ball taller
+  than the gap cannot fit between tiers — it jams under the ledge above, gets
+  squeezed sideways, and stops dead. This was a real bug, and it presents as
+  the ball freezing rather than as anything to do with size.
+- `base_jump_impulse` must give an apex well clear of `rise_max`, with real
+  headroom rather than a hair, or tiers are unreachable and the run dead-ends
+  for reasons the player cannot see.
+- `max_roll_speed` must be small enough that the drift during a flight is about
+  one `max_lateral_step`. Horizontal velocity carries through a jump, and the
+  player cannot steer, so a fast ball crosses the whole shaft mid-air and hits
+  the far wall instead of the tier it was aimed at.
 
 **The arrow is the whole interface.** The body is a featureless circle with a
 single arrow along its underside. Where the arrow points is where the push will
@@ -269,37 +293,27 @@ The two dials that matter most, and are easiest to get wrong:
 - **`start_phase_deg`** puts the frog on 4:30 standing still, so a player's
   very first press — made before they know there is a window — is a good
   forward launch rather than a coin flip.
-- **`drive_direction`** is a property of the run, not of the frog. It must not
+- **`drive_direction`** is a property of the run, not of the ball. It must not
   follow the direction of travel: tying the self-drive to travel means one
-  mistimed opening tap reverses the frog and then accelerates it backward for
-  ever — a dead run the player never chose and cannot recover from.
+  mistimed opening press reverses the ball and then accelerates it backward for
+  ever — a dead run the player never chose and cannot recover from. The shaft
+  walls may turn the ball around; its own velocity may not.
 
 **After any tuning change, run the probe** (§5) and check the gradient still
-looks like this. Timed play should beat no play by a wide margin, and tapping
-at the very edge of the window should be punished:
+looks like this. In a climber the shape differs from a roller: `neutral` (6
+o'clock, straight up) is the honest climb jump, and `boost` (4:30) trades height
+for reach across the shaft. Both must beat `never` by a wide margin.
 
 ```
 policy   | median m | note
 ---------|----------|------------------------------------------------
-never    |     20.4 | baseline: no input at all
-random   |     26.2 | mashing
-neutral  |     26.1 | pressing at 6 o'clock, untimed
-boost    |     65.3 | pressing near 4:30 — should win by a lot
-late     |     26.2 | pressing at the 3 o'clock edge — should be punished
+never    |      1.3 | baseline: no input at all — this is just the ball's
+         |          | own radius above the spawn point, i.e. zero climb
+neutral  |      8.2 | pressing at 6 o'clock — straight up, the climb jump
+boost    |      6.9 | pressing near 4:30 — trades height for reach
 ```
 
-If `boost` stops beating `never` by a wide margin, the change broke the game
-rather than tuning it.
-
-The probe also sweeps radius with the skilled policy held fixed. Five seeds per
-row is noisy, so read the shape rather than any single number — but the shape
-says small frogs lose (they outspin the player) and the usable band starts
-around 52:
-
-```
-radius |  40  |  52  |  64  |  76  |  88  | 104  | 124
-median | 30.8 | 70.0 | 57.7 | 59.2 | 38.8 | 38.8 | 68.9
-```
-
-124 scoring well is not a recommendation: a frog that big rolls over terrain
-that was supposed to need a jump, which is a different game.
+If timed play stops beating `never` by several times over, the change broke the
+game rather than tuning it. Watch for the specific failure where every policy
+collapses to roughly `never`: that is not a difficulty problem, it means the
+ball is being stopped by geometry — see the three coupled numbers above.

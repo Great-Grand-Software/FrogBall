@@ -16,19 +16,18 @@ GameState="*res://scripts/autoload/game_state.gd"
 
 [display]
 
-; Landscape, 16:9. The frog rolls rightward, so the frame has to show the
-; run-up, the launch and the landing at once — a portrait frame shows barely
-; one segment and the player cannot read the gap before committing. Every
-; other screen gets this same frame, centred and letterboxed, rather than a
-; responsive reflow. That is stretch/aspect="keep".
+; Portrait, 9:16. The run climbs a narrow shaft, so the frame has to show the
+; ledge above the frog — the thing being aimed at — rather than a long run-up
+; beside it. Every other screen gets this same frame, centred and letterboxed,
+; rather than a responsive reflow. That is stretch/aspect="keep".
 ; These values are asserted by scripts/check-constraints.sh against
 ; project.conf — change them in both places, deliberately.
-window/size/viewport_width=1280
-window/size/viewport_height=720
+window/size/viewport_width=720
+window/size/viewport_height=1280
 window/size/resizable=true
 window/stretch/mode="canvas_items"
 window/stretch/aspect="keep"
-window/handheld/orientation=0
+window/handheld/orientation=1
 
 [rendering]
 

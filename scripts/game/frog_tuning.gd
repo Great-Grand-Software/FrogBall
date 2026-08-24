@@ -71,14 +71,19 @@ enum MistimedTap {
 ## Automatic forward acceleration while grounded, px/s^2. This is the "the frog
 ## rolls itself" term and is NOT steerable — there is no input for it. Set it to
 ## 0 for a pure gravity roller, which then needs levels that always trend down.
-@export_range(0.0, 2000.0, 10.0, "or_greater") var grounded_drive_accel: float = 380.0
+@export_range(0.0, 2000.0, 10.0, "or_greater") var grounded_drive_accel: float = 280.0
 
 ## Rolling resistance while grounded, px/s^2, always opposing motion.
 @export_range(0.0, 2000.0, 10.0, "or_greater") var roll_resistance: float = 90.0
 
-## Terminal roll speed along the ground, px/s. Capped as much for readability
-## as for difficulty — past this the spin outruns the player's timing.
-@export_range(100.0, 4000.0, 10.0, "or_greater") var max_roll_speed: float = 950.0
+## Terminal roll speed along the ground, px/s.
+##
+## Much lower in a climber than it would be in a roller, and for a reason that
+## is not difficulty: horizontal velocity is preserved through a jump, so a fast
+## frog crosses the whole shaft while airborne and slams into the far wall
+## instead of landing on the tier it was aimed at. Roll speed and shaft width
+## are coupled — widen one and this has to move too.
+@export_range(100.0, 4000.0, 10.0, "or_greater") var max_roll_speed: float = 400.0
 
 ## How fast speed above [member max_roll_speed] bleeds off, px/s^2. A very late
 ## jump can shove the frog past the cap; decaying it keeps the cap from reading
@@ -105,7 +110,13 @@ enum MistimedTap {
 
 ## Straight-up impulse for a perfectly neutral 6 o'clock tap, px/s, at full
 ## charge. A shorter press scales this down — see [member min_tap_power].
-@export_range(100.0, 3000.0, 10.0, "or_greater") var base_jump_impulse: float = 900.0
+##
+## In a climber this is load-bearing: it sets the apex, and the apex has to
+## clear LevelTuning.rise_max or tiers become unreachable — and it needs real
+## headroom, not a hair: the frog has to arrive above the ledge with enough
+## margin to actually come down on it. At 1450 against the default gravity the
+## apex is about 478px against a 285px rise.
+@export_range(100.0, 3000.0, 10.0, "or_greater") var base_jump_impulse: float = 1450.0
 
 # --- how long you hold ------------------------------------------------------
 # The clock decides WHERE the jump goes. The press decides HOW HARD. They are

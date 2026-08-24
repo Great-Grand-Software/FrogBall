@@ -42,11 +42,13 @@ func test_the_whole_run_fits_under_the_node_ceiling() -> void:
 
 func test_terrain_collision_is_a_fixed_pool() -> void:
 	var terrain: Node = _screen.get_node("%Terrain")
-	assert_eq(
-		terrain.get_child_count(),
-		TerrainPlan.MAX_SEGMENTS,
-		"one polygon per capped segment, allocated once"
-	)
+	var ledges: int = 0
+	for child: Node in terrain.get_children():
+		if child is CollisionPolygon2D:
+			ledges += 1
+	assert_eq(ledges, TerrainPlan.MAX_SEGMENTS, "one polygon per capped ledge, allocated once")
+	# The two shaft walls are repositioned, never added to.
+	assert_eq(terrain.get_child_count(), TerrainPlan.MAX_SEGMENTS + 2, "plus exactly two walls")
 
 
 func test_generating_far_more_terrain_spawns_nothing() -> void:
@@ -54,7 +56,7 @@ func test_generating_far_more_terrain_spawns_nothing() -> void:
 	var before: int = _count_nodes(_screen)
 	var plan: TerrainPlan = _screen.terrain_plan()
 	for step: int in range(500):
-		plan.advance_to(float(step) * 800.0)
+		plan.advance_above(float(-step) * 500.0)
 	_screen.refresh_terrain()
 	assert_eq(_count_nodes(_screen), before, "500 advances later, the same nodes")
 
@@ -95,8 +97,13 @@ func test_the_frog_rolls_forward_on_its_own() -> void:
 	var frog: Node2D = _screen.get_node("%Frog")
 	await wait_physics_frames(6)
 	var from: float = frog.global_position.x
-	await wait_physics_frames(90)
-	assert_gt(frog.global_position.x - from, 200.0, "1.5 s of rolling covers real ground")
+	# Measured before it can reach a wall: the shaft is narrow, and a bounce
+	# would make a directional assertion meaningless. The threshold is well
+	# under what a second of rolling covers, because roll speed is tuned against
+	# the shaft width and will move again — this asserts "it moves at all",
+	# which is the property worth pinning, not a particular speed.
+	await wait_physics_frames(60)
+	assert_gt(absf(frog.global_position.x - from), 60.0, "it gets itself moving")
 
 
 func test_the_frog_settles_onto_the_terrain_rather_than_falling_through() -> void:
@@ -124,15 +131,15 @@ func test_a_run_survives_its_opening_seconds() -> void:
 	_screen.run_seed = A_PINNED_SEED
 	_screen.start_run()
 	var frog: Node2D = _screen.get_node("%Frog")
-	var start_x: float = _screen.terrain_plan().start_point().x
 	await wait_physics_frames(120)
-	assert_gt(frog.global_position.x, start_x, "still going forward two seconds in")
+	assert_true(_screen.is_running(), "still alive two seconds in")
 
 
 func test_a_frog_knocked_backward_rolls_itself_back() -> void:
 	# Regression. The self-drive used to follow the direction of travel, so one
 	# mistimed opening tap could reverse the frog and then accelerate it
 	# backward for ever — a dead run with no way for the player to recover.
+	# Walls may now turn the frog around, but its own velocity still may not.
 	_screen.run_seed = A_PINNED_SEED
 	_screen.start_run()
 	var frog: FrogBody = _screen.get_node("%Frog")

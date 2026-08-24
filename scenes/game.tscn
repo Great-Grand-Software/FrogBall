@@ -16,6 +16,12 @@ level_tuning = ExtResource("4_leveltune")
 [node name="Terrain" type="StaticBody2D" parent="."]
 unique_name_in_owner = true
 
+[node name="LeftWall" type="CollisionShape2D" parent="Terrain"]
+unique_name_in_owner = true
+
+[node name="RightWall" type="CollisionShape2D" parent="Terrain"]
+unique_name_in_owner = true
+
 [node name="Frog" type="RigidBody2D" parent="."]
 unique_name_in_owner = true
 script = ExtResource("2_frog")
