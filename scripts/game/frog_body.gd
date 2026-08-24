@@ -30,15 +30,17 @@ const CONTACTS_REPORTED: int = 8
 ## that the physics step does not start by resolving an overlap.
 const GROUND_CLEARANCE: float = 2.0
 
-## Angle of each back-leg hip either side of the feet axis, radians.
-const LEG_HIP_RAD: float = 0.75
+## Where the arrow sits at rest, as a fraction of the radius. 1.0 is the rim.
+const ARROW_REST_RATIO: float = 0.96
 
-## Angle of each shoulder either side of the face axis, radians.
-const ARM_SHOULDER_RAD: float = 0.85
+## Where the arrow's tail starts, as a fraction of the radius.
+const ARROW_TAIL_RATIO: float = 0.08
 
-## Half-width of the drawn feet band, radians. Wide enough to read as "this end
-## is the bottom" at a glance while the body is spinning.
-const FEET_ARC_HALF_RAD: float = 0.62
+## Arrow head length, as a fraction of the radius.
+const ARROW_HEAD_RATIO: float = 0.38
+
+## Arrow shaft width, as a fraction of the radius.
+const ARROW_WIDTH_RATIO: float = 0.1
 
 @export var tuning: FrogTuning
 
@@ -55,6 +57,8 @@ var _circle: CircleShape2D = CircleShape2D.new()
 var _holding: bool = false
 var _held_for: float = 0.0
 var _thrusting: bool = false
+var _arrow_push: float = 0.0
+var _head: PackedVector2Array = PackedVector2Array()
 var _thrust_impulse: Vector2 = Vector2.ZERO
 var _thrust_applied: float = 0.0
 var _coyote_timer: float = 0.0
@@ -78,6 +82,7 @@ func _ready() -> void:
 	can_sleep = false
 
 	_rng.randomize()
+	_head.resize(3)
 	_shape.shape = _circle
 	_apply_radius()
 
@@ -95,75 +100,58 @@ func _ready() -> void:
 
 
 func _draw() -> void:
-	# Drawn here rather than as child sprites so the whole frog is one canvas
-	# item and the face/feet axis rotates with the body for free.
-	#
-	# The feet are drawn as the single heaviest mark on the body, and the face
-	# as something obviously different. Reading which way round the frog is IS
-	# the game — if a player cannot tell the feet from the face at a glance
-	# while it is spinning, there is nothing for them to time against.
+	# A circle and one arrow, nothing else. The arrow lies along the body's local
+	# "down", which is the axis the whole game is timed against: wherever the
+	# arrow points is where the push will come from. Keeping the body featureless
+	# means there is exactly one thing to read while it spins.
 	var radius: float = _radius
 	var ink := Color(0.94, 0.94, 0.92)
 	draw_circle(Vector2.ZERO, radius, Color(0.14, 0.17, 0.15))
 	draw_arc(Vector2.ZERO, radius, 0.0, TAU, 48, ink, 3.0)
-
-	# Feet: a solid band across the bottom of the body. Local down is +y, which
-	# is angle +PI/2 in Godot's 2D convention.
-	var down_angle: float = PI * 0.5
-	draw_arc(
-		Vector2.ZERO,
-		radius * 0.82,
-		down_angle - FEET_ARC_HALF_RAD,
-		down_angle + FEET_ARC_HALF_RAD,
-		16,
-		ink,
-		radius * 0.3
-	)
-	for side: float in [-1.0, 1.0]:
-		var toe: Vector2 = Vector2.DOWN.rotated(side * FEET_ARC_HALF_RAD) * radius * 0.82
-		draw_circle(toe, radius * 0.17, ink)
-
-	# Face: eyes on the opposite side, small and clearly not the feet.
-	var brow: Vector2 = Vector2.UP * radius * 0.46
-	draw_circle(brow + Vector2.LEFT * radius * 0.26, radius * 0.13, ink)
-	draw_circle(brow + Vector2.RIGHT * radius * 0.26, radius * 0.13, ink)
-	draw_arc(Vector2.UP * radius * 0.2, radius * 0.3, 0.35, PI - 0.35, 12, ink, 3.0)
-
-	_draw_limbs(radius, ink)
-
-	# One rim spoke, so spin rate stays readable even at full speed.
-	draw_line(Vector2.RIGHT * radius * 0.55, Vector2.RIGHT * radius, ink, 3.0)
+	_draw_arrow(radius, ink)
 
 
-## Four stick limbs poking out past the rim: two long back legs kicking out
-## behind the feet, two short arms reaching out past the face.
+## The arrow, drawn along local down and extending past the rim as it fires.
 ##
-## Deliberately crude. They are not decoration — they exist so a player can see
-## at a glance which end is up, which end is down, and which way the frog is
-## pointing, on a body that is otherwise a spinning circle. Anything more
-## detailed would read as mush at three revolutions a second.
-func _draw_limbs(radius: float, ink: Color) -> void:
-	var width: float = maxf(radius * 0.08, 2.0)
+## At rest it stops at the rim. On a jump it shoots out — planting itself into
+## the ground and shoving the body off it — and stays out for as long as the
+## player keeps holding, which is exactly as long as power is still feeding in.
+## So the arrow is not decoration: its direction is the aim and its length is
+## the commitment, the two halves of the only input in the game.
+func _draw_arrow(radius: float, ink: Color) -> void:
+	var reach: float = radius * (ARROW_REST_RATIO + _arrow_push * tuning.arrow_extend_ratio)
+	var width: float = maxf(radius * ARROW_WIDTH_RATIO, 2.0)
+	var head_length: float = radius * ARROW_HEAD_RATIO
+	var head_half: float = radius * ARROW_HEAD_RATIO * 0.62
 
-	# Every joint is placed as an angle-and-distance from the feet/face axis, so
-	# the whole set stays symmetrical and none of it disappears under the body.
-	# The far joints sit outside the rim on purpose: limbs that poke past the
-	# circle are what make orientation readable while it is spinning.
-	for side: float in [-1.0, 1.0]:
-		# Back legs: long, bent, kicking out and back, like a frog mid-leap.
-		var hip: Vector2 = Vector2.DOWN.rotated(side * 0.85) * radius * 0.88
-		var knee: Vector2 = Vector2.DOWN.rotated(side * 1.20) * radius * 1.44
-		var foot: Vector2 = Vector2.DOWN.rotated(side * 1.72) * radius * 1.30
-		draw_line(hip, knee, ink, width)
-		draw_line(knee, foot, ink, width)
-		draw_circle(foot, width, ink)
+	# Local down is +y, and the body's own rotation carries the arrow round the
+	# clock for free.
+	var tip: Vector2 = Vector2.DOWN * reach
+	var neck: Vector2 = Vector2.DOWN * maxf(reach - head_length, 0.0)
+	draw_line(Vector2.DOWN * (radius * ARROW_TAIL_RATIO), neck, ink, width)
 
-		# Arms: short and straight, reaching out past the face, so the two ends
-		# of the body can never be mistaken for each other.
-		var shoulder: Vector2 = Vector2.UP.rotated(side * 0.72) * radius * 0.9
-		var hand: Vector2 = Vector2.UP.rotated(side * 0.5) * radius * 1.34
-		draw_line(shoulder, hand, ink, width)
-		draw_circle(hand, width * 0.85, ink)
+	# Head as a filled triangle, into a buffer allocated once, so an animating
+	# arrow never allocates per frame.
+	_head[0] = tip
+	_head[1] = neck + Vector2.RIGHT * head_half
+	_head[2] = neck + Vector2.LEFT * head_half
+	draw_colored_polygon(_head, ink)
+
+
+## Retracts the arrow after a jump.
+##
+## Held out at full reach for as long as thrust is still feeding in, so the
+## arrow stays planted exactly while the press is still doing something, then
+## springs back. Runs on the render clock rather than the physics one because
+## it is purely cosmetic.
+func _process(delta: float) -> void:
+	if _thrusting:
+		_arrow_push = 1.0
+	elif _arrow_push > 0.0:
+		_arrow_push = maxf(_arrow_push - delta / maxf(tuning.arrow_recoil_sec, 0.01), 0.0)
+	else:
+		return
+	queue_redraw()
 
 
 func _integrate_forces(state: PhysicsDirectBodyState2D) -> void:
@@ -252,6 +240,12 @@ func charge() -> float:
 	return clampf(_held_for / maxf(tuning.max_hold_sec, 0.001), 0.0, 1.0)
 
 
+## How far the arrow is currently shot out, 0 at rest and 1 fully planted.
+## Exposed so the visual can be asserted, since a silent jump is a real defect.
+func arrow_push() -> float:
+	return _arrow_push
+
+
 ## Radius this run rolled, px.
 func radius() -> float:
 	return _radius
@@ -269,6 +263,7 @@ func reset_to(ground_point: Vector2) -> void:
 	_held_for = 0.0
 	_thrusting = false
 	_thrust_applied = 0.0
+	_arrow_push = 0.0
 	_coyote_timer = 0.0
 	_buffer_timer = 0.0
 	_air_jumps_used = 0
@@ -354,6 +349,7 @@ func _apply_tap(
 	_coyote_timer = 0.0
 	# The solve above used the flick floor, so what just fired is the smallest
 	# jump this angle can give. Keeping hold of the button feeds in the rest.
+	_arrow_push = 1.0
 	_thrust_impulse = _outcome.full_impulse
 	_thrust_applied = JumpSolver.charge_multiplier(tuning, 0.0)
 	_thrusting = _holding

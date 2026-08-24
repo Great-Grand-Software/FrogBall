@@ -49,7 +49,7 @@ of **every** Godot Web build; do not relax them.
 | **Fixed frame** | 1280×720 landscape, in `project.conf`. Off-shape screens get the same frame centred and letterboxed, never a responsive reflow — that is `stretch/aspect="keep"`. Landscape is load-bearing: the player has to see the run-up, the launch and the landing at once. |
 | **One button, and nothing else** | Tap, click, or space. Press and release both matter — press fires the jump, holding feeds in power — but it is still ONE button. No tilt, no drag, no swipe, no multi-touch, no keyboard requirement. Rolling is automatic and momentum-driven; there is no input that steers speed or direction, and adding one changes what the prototype is testing. |
 | **No tutorial, ever** | No hint text, no onboarding, no arrows, no "nice timing" feedback, no on-screen indication of where the jump window is. The prototype's entire question is whether the timing reads with nothing explained; anything that explains it answers the question for the player. The distance readout is a score, not a hint, and is the only text a run shows. |
-| **Monochrome** | Off-white ink on near-black. Line art, no rasters. |
+| **Monochrome** | Off-white ink on near-black. Line art, no rasters. The body is a bare circle with one arrow — the arrow is the only thing on screen carrying information, and anything else drawn on the body competes with it. |
 
 ---
 
@@ -87,8 +87,8 @@ about whether something "looks reasonable".
   fixed-size ring buffer and the collision pool is sized from the same
   constant, so an endless run cannot grow the scene.
 - **Prefer one `_draw()` over many nodes** for repeated visual elements. The
-  terrain draws every segment in one pass, and the frog draws its whole body,
-  face and feet in one more.
+  terrain draws every segment in one pass, and the body draws its circle and
+  arrow in one more.
 - Every spawned node needs an owner responsible for freeing it.
 - **No unbounded loops.** `TerrainPlan.advance_to()` is capped per call by
   `MAX_SPANS_PER_ADVANCE` for exactly this reason.
@@ -216,6 +216,15 @@ straight up, keeping the speed you had. Tap later, with the feet swung toward
 a 45° launch and roughly double the ground covered. Tap in the top half and you
 whiff. The point of the prototype is to find out whether a player with no
 instructions discovers that gradient within a few seconds of failing at it.
+
+**The arrow is the whole interface.** The body is a featureless circle with a
+single arrow along its underside. Where the arrow points is where the push will
+come from, so reading the arrow *is* reading the clock. On a press it shoots out
+past the rim and plants into the ground — the shove is visibly coming from the
+arrow rather than from nowhere — and it stays out for exactly as long as power
+is still feeding in, so its length is the commitment. Direction is the aim,
+extension is the effort; that is the entire visual language and nothing else on
+the body may compete with it.
 
 **How long you hold is the second half of the input.** The press fires the jump
 immediately, at its weakest, in the direction the clock was showing at that

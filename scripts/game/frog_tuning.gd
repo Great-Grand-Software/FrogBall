@@ -128,6 +128,22 @@ enum MistimedTap {
 ## necessary for a full jump; below 1 makes most presses feel strong.
 @export_range(0.2, 4.0, 0.05, "or_greater") var charge_curve_exponent: float = 1.0
 
+# --- the arrow ------------------------------------------------------------
+# The body is a bare circle with one arrow along its underside. The arrow IS
+# the interface: where it points is the aim, and it shoots out on a jump so the
+# push visibly comes from the arrow planting into the ground.
+
+## How far the arrow shoots past the rim when it fires, as a fraction of the
+## radius. This is the only "juice" in the game, and it is doing real work —
+## the extension is what makes a press look like a shove off the floor rather
+## than the ball simply teleporting upward.
+@export_range(0.0, 2.0, 0.05, "or_greater") var arrow_extend_ratio: float = 0.7
+
+## How long the arrow takes to spring back once the press stops feeding in,
+## seconds. It stays fully out while power is still being applied, so this only
+## covers the retraction.
+@export_range(0.02, 1.0, 0.01, "or_greater") var arrow_recoil_sec: float = 0.16
+
 # --- the forward half: 6 o'clock toward 3 ----------------------------------
 
 ## Launch tilt off vertical at the leading edge of the window. At the default 90
