@@ -82,7 +82,7 @@ func _play(policy: String, run_seed: int, mode: int) -> float:
 	for step: int in range(MAX_STEPS):
 		spacing = maxi(spacing - 1, 0)
 		if step > WARMUP_STEPS and spacing == 0 and frog.can_kick():
-			var drag: Vector2 = _drag_for(policy, frog, rng, screen)
+			var drag: Vector2 = _drag_for(policy, frog, rng, screen, climbing)
 			if drag != Vector2.ZERO:
 				frog.kick(drag)
 				spacing = KICK_SPACING_STEPS
@@ -101,7 +101,8 @@ func _play(policy: String, run_seed: int, mode: int) -> float:
 ## What each bot drags, in viewport pixels. Remember the inversion: the drag
 ## direction is where the arrow points, and the ball goes the OTHER way.
 func _drag_for(
-	policy: String, frog: FrogBody, rng: RandomNumberGenerator, screen: Node2D
+	policy: String, frog: FrogBody, rng: RandomNumberGenerator, screen: Node2D,
+	climbing: bool
 ) -> Vector2:
 	var full: float = screen.frog_tuning.max_drag_px
 	var velocity: Vector2 = frog.linear_velocity
@@ -112,16 +113,18 @@ func _drag_for(
 		"always_up":
 			drag = Vector2.DOWN * full
 		"recover":
-			# Economical: launch off a surface, then spend kicks only to arrest
-			# a fall. The grounded case is load-bearing — without it the bot
-			# waits to be falling, never leaves the ground, and so never falls.
-			if frog.grounded or velocity.y > 250.0:
+			# Economical, and necessarily mode-aware. Climbing, height only
+			# comes from kicks, so it launches off every surface. Rolling, the
+			# ball already carries itself forward and a kick upward THROWS AWAY
+			# that roll — so it spends kicks only to arrest a fall. Measured:
+			# using the climb policy on a roll course drops it from 75.8m to
+			# 8.9m, the same as mindlessly kicking up.
+			if velocity.y > 250.0 or (climbing and frog.grounded):
 				drag = Vector2.DOWN * full
 		"aimed":
-			# Push back against whatever is going wrong: up off a surface or
-			# out of a fall, sideways when drifting hard across the shaft.
-			if frog.grounded or velocity.y > 250.0:
+			# As recover, plus a sideways save when drifting hard across a shaft.
+			if velocity.y > 250.0 or (climbing and frog.grounded):
 				drag = Vector2.DOWN * full
-			elif absf(velocity.x) > 260.0:
+			elif climbing and absf(velocity.x) > 260.0:
 				drag = Vector2(signf(velocity.x), 0.0) * full
 	return drag
