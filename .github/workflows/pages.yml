@@ -9,17 +9,22 @@ name: Deploy Pages
 # repository's Pages source is "GitHub Actions", where a branch push is ignored
 # and a workflow has to do the deploying instead.
 #
-# It has to sit on the default branch: the github-pages environment's
-# deployment branch policy allows only the default branch, so the identical
-# workflow on gh-pages was rejected before a single step ran.
+# It has to run FROM the default branch. The github-pages environment's
+# deployment branch policy allows only the default branch, and a push-triggered
+# run executes from the branch that was pushed — so triggering this on a
+# gh-pages push produced a run that the environment refused before any step
+# ran. That is why there is no push:gh-pages trigger here: it could not ever
+# work, and it left a failed run behind on every publish.
+#
+# So: dispatch it after pushing a build to gh-pages, or push to main.
 #
 # It builds nothing. It takes whatever is already on gh-pages and ships it, so
 # it stays out of CI's way and does not duplicate the export.
 
 on:
-  push:
-    branches: [gh-pages]
   workflow_dispatch:
+  push:
+    branches: [main]
 
 permissions:
   contents: read
