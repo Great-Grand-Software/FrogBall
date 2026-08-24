@@ -112,14 +112,15 @@ func _drag_for(
 		"always_up":
 			drag = Vector2.DOWN * full
 		"recover":
-			# Only spend a kick when actually falling. Tests whether economy
-			# beats spamming, which is what the cooldown is meant to reward.
-			if velocity.y > 250.0:
+			# Economical: launch off a surface, then spend kicks only to arrest
+			# a fall. The grounded case is load-bearing — without it the bot
+			# waits to be falling, never leaves the ground, and so never falls.
+			if frog.grounded or velocity.y > 250.0:
 				drag = Vector2.DOWN * full
 		"aimed":
-			# Push back against whatever is going wrong: up when falling,
-			# sideways when about to leave the shaft.
-			if velocity.y > 250.0:
+			# Push back against whatever is going wrong: up off a surface or
+			# out of a fall, sideways when drifting hard across the shaft.
+			if frog.grounded or velocity.y > 250.0:
 				drag = Vector2.DOWN * full
 			elif absf(velocity.x) > 260.0:
 				drag = Vector2(signf(velocity.x), 0.0) * full
