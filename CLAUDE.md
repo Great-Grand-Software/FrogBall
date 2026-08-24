@@ -299,21 +299,41 @@ The two dials that matter most, and are easiest to get wrong:
   ever — a dead run the player never chose and cannot recover from. The shaft
   walls may turn the ball around; its own velocity may not.
 
-**After any tuning change, run the probe** (§5) and check the gradient still
-looks like this. In a climber the shape differs from a roller: `neutral` (6
-o'clock, straight up) is the honest climb jump, and `boost` (4:30) trades height
-for reach across the shaft. Both must beat `never` by a wide margin.
+**After any tuning change, run the probe** (§5). The current numbers, and they
+are not a success:
 
 ```
 policy   | median m | note
 ---------|----------|------------------------------------------------
-never    |      1.3 | baseline: no input at all — this is just the ball's
-         |          | own radius above the spawn point, i.e. zero climb
-neutral  |      8.2 | pressing at 6 o'clock — straight up, the climb jump
-boost    |      6.9 | pressing near 4:30 — trades height for reach
+never    |      1.3 | baseline: no input at all. NB this is purely the
+         |          | ball's own radius above spawn — it is zero climb
+random   |      8.1 | mashing
+neutral  |      8.1 | pressing at 6 o'clock — straight up
+boost    |      1.3 | pressing near 4:30 — dies before climbing at all
+late     |      1.3 | pressing at the 3 o'clock edge — dies likewise
 ```
 
-If timed play stops beating `never` by several times over, the change broke the
-game rather than tuning it. Watch for the specific failure where every policy
-collapses to roughly `never`: that is not a difficulty problem, it means the
-ball is being stopped by geometry — see the three coupled numbers above.
+**Read that honestly: mashing scores exactly as well as deliberate timing.**
+The climb works, and pressing beats not-pressing by six times, but `random`
+matching `neutral` means the prototype's actual question — does timing read as
+skill? — currently answers *no* on the vertical variant.
+
+Two things cause it, and both are consequences of the axis change rather than
+bugs:
+
+- **The forward half of the window is a liability in a shaft, not a reward.**
+  A 4:30 launch trades height for sideways reach, which in a narrow column
+  throws the ball into a wall and off the tier. In the horizontal roller the
+  forward boost was the whole skill gradient; here it is how you die.
+- **A 180° window is too generous to require timing.** Half of all rotations
+  are a valid press and anything near 6 o'clock climbs, so mashing finds it by
+  accident. Narrowing `window_arc_deg` is the obvious lever — the brief always
+  treated the arc as a value to dial in through play, not a fixed rule.
+
+Do not "fix" this by making the level easier. If a change makes `random` and
+`neutral` diverge, it is working; if they stay level, the mechanic is not being
+tested no matter how good the run feels.
+
+Watch also for every policy collapsing to roughly `never`: that is not
+difficulty, it means the ball is being stopped by geometry — see the three
+coupled numbers above.
