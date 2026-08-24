@@ -1,0 +1,36 @@
+# Code owners.
+#
+# Replace @OWNER with the GitHub username or team that must approve changes to
+# the load-bearing files below. Ordinary gameplay PRs are deliberately NOT
+# listed — there is no catch-all `*` rule, so day-to-day work is never gated on
+# one person.
+#
+# `require_code_owner_reviews: true` in scripts/apply-repo-settings.sh is what
+# makes this file binding. Without that flag it is only a suggestion GitHub
+# renders in the UI.
+
+# The rules agents and reviewers work from.
+/CLAUDE.md                        @OWNER
+
+# CI/CD: the six required checks, the preview deployment, the deploy.
+/.github/workflows/               @OWNER
+
+# Repo protection and provenance.
+/.github/CODEOWNERS               @OWNER
+/.github/stamp-build.sh           @OWNER
+/scripts/apply-repo-settings.sh   @OWNER
+
+# The environment, and the gate definitions.
+/scripts/bootstrap.sh             @OWNER
+/scripts/check-constraints.sh     @OWNER
+/.claude/                         @OWNER
+
+# Config the gates READ. These are listed for the same reason the workflows
+# are: they decide what the gates mean, and no job re-checks them.
+#
+# .gdlintrc IS the lint gate — adding a rule to its `disable:` list makes
+# `lint` pass on code it should reject. project.godot and project.conf carry
+# the frame and threading constraints that nothing else in CI re-derives.
+/.gdlintrc                        @OWNER
+/project.godot                    @OWNER
+/project.conf                     @OWNER

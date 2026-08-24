@@ -1,0 +1,65 @@
+name: PR Preview Cleanup
+
+# Removes a PR's preview build from gh-pages once the PR is closed or merged,
+# so the previews directory does not grow without bound.
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: gh-pages-deploy
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    name: cleanup
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out gh-pages
+        uses: actions/checkout@v4
+        with:
+          ref: gh-pages
+          path: pages
+        continue-on-error: true
+
+      - name: Remove this PR's preview
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -e
+          if [ ! -d pages/.git ]; then
+            echo "no gh-pages branch yet; nothing to clean up"
+            exit 0
+          fi
+          cd pages
+          if [ ! -d "pr-${PR_NUMBER}" ]; then
+            echo "no preview published for PR #${PR_NUMBER}"
+            exit 0
+          fi
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          rm -rf "pr-${PR_NUMBER}"
+
+          # Same single-orphan-commit strategy as the publish workflow: a plain
+          # `git rm` would leave the removed 40 MB build in history anyway, so
+          # removing it would not actually reclaim anything.
+          git checkout -q --orphan republish
+          git add -A
+          git commit -q -m "Remove preview build for closed PR #${PR_NUMBER}"
+          git branch -qM gh-pages
+
+          for attempt in 1 2 3 4; do
+            if git push -q --force origin gh-pages; then
+              echo "cleaned up"
+              exit 0
+            fi
+            sleep $((attempt * 2))
+          done
+          echo "::error::could not clean up preview after 4 attempts"
+          exit 1

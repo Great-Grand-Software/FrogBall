@@ -1,0 +1,192 @@
+name: PR Preview
+
+# Deploys the Web build from a CI run to a unique per-PR URL on GitHub Pages,
+# so any change can be opened and played in a real browser with zero local
+# setup. This is the primary review mechanism for gameplay changes.
+#
+# This runs on `workflow_run` rather than `pull_request` on purpose: the build
+# itself happens in the untrusted PR context with no write access, and only
+# this trusted, separately-triggered workflow holds the token that can publish.
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: read
+
+# Serialize gh-pages writes so two PRs finishing at once cannot race.
+concurrency:
+  group: gh-pages-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy-preview:
+    name: deploy-preview
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    if: >
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'pull_request'
+    steps:
+      - name: Download the Web build from the CI run
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const artifacts = await github.rest.actions.listWorkflowRunArtifacts({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: context.payload.workflow_run.id,
+            });
+            const match = artifacts.data.artifacts.find(a => a.name === 'web-build');
+            if (!match) {
+              core.setFailed('CI run produced no web-build artifact');
+              return;
+            }
+            const zip = await github.rest.actions.downloadArtifact({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              artifact_id: match.id,
+              archive_format: 'zip',
+            });
+            fs.writeFileSync('web-build.zip', Buffer.from(zip.data));
+
+      - name: Unpack and read the PR number
+        id: unpack
+        run: |
+          set -e
+          mkdir -p preview
+          unzip -q web-build.zip -d preview
+
+          if [ ! -f preview/pr-number.txt ]; then
+            echo "::error::build artifact carries no pr-number.txt"
+            exit 1
+          fi
+          PR_NUMBER="$(tr -cd '0-9' < preview/pr-number.txt)"
+          if [ -z "$PR_NUMBER" ]; then
+            echo "::error::pr-number.txt did not contain a PR number"
+            exit 1
+          fi
+          rm -f preview/pr-number.txt
+
+          if [ ! -s preview/index.html ] || [ ! -s preview/index.wasm ]; then
+            echo "::error::build artifact is missing index.html or index.wasm"
+            exit 1
+          fi
+
+          echo "pr_number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
+          echo "deployed a preview for PR #$PR_NUMBER"
+
+      - name: Stamp the preview with its commit
+        env:
+          PR_NUMBER: ${{ steps.unpack.outputs.pr_number }}
+        run: |
+          # A tester who already has the preview open cannot otherwise tell a
+          # replaced build from the one they were looking at.
+          curl -fsSL -o stamp-build.sh \
+            "https://raw.githubusercontent.com/${{ github.repository }}/${{ github.event.workflow_run.head_sha }}/.github/stamp-build.sh" \
+            2>/dev/null || cp .github/stamp-build.sh stamp-build.sh 2>/dev/null || true
+          if [ -f stamp-build.sh ]; then
+            bash stamp-build.sh preview "PR #${PR_NUMBER}" "${{ github.event.workflow_run.head_sha }}"
+          else
+            echo "::warning::stamp-build.sh unavailable; publishing unstamped"
+          fi
+
+      - name: Check out the gh-pages branch
+        uses: actions/checkout@v4
+        with:
+          ref: gh-pages
+          path: pages
+        continue-on-error: true
+
+      - name: Create gh-pages if it does not exist yet
+        run: |
+          if [ ! -d pages/.git ]; then
+            mkdir -p pages
+            cd pages
+            git init -q
+            git checkout -q -b gh-pages
+            git remote add origin \
+              "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git"
+            # Jekyll would swallow files and folders beginning with an
+            # underscore; Godot's exports do not need it.
+            touch .nojekyll
+            printf '# Preview builds\n\nPer-PR preview builds are published under `pr-<number>/`.\n' > index.md
+          fi
+
+      - name: Publish the preview
+        env:
+          PR_NUMBER: ${{ steps.unpack.outputs.pr_number }}
+        run: |
+          set -e
+          cd pages
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          rm -rf "pr-${PR_NUMBER}"
+          mkdir -p "pr-${PR_NUMBER}"
+          cp -R ../preview/. "pr-${PR_NUMBER}/"
+          touch .nojekyll
+
+          # A Godot Web build is ~40 MB, almost all of it wasm. Keeping each
+          # publish as an ordinary commit would leave every preview ever built
+          # in gh-pages history forever — a few dozen PRs would be gigabytes.
+          # Republishing as a single orphan commit means the branch only ever
+          # weighs what the currently-live previews weigh. The gh-pages-deploy
+          # concurrency group serializes writers, so the force-push is safe.
+          git checkout -q --orphan republish
+          git add -A
+          git commit -q -m "Preview builds (latest: PR #${PR_NUMBER} @ ${GITHUB_SHA::7})"
+          git branch -qM gh-pages
+
+          for attempt in 1 2 3 4; do
+            if git push -q --force origin gh-pages; then
+              echo "published"
+              exit 0
+            fi
+            echo "push rejected (attempt ${attempt}); retrying"
+            sleep $((attempt * 2))
+          done
+          echo "::error::could not publish preview after 4 attempts"
+          exit 1
+
+      - name: Comment the preview URL on the PR
+        uses: actions/github-script@v7
+        env:
+          PR_NUMBER: ${{ steps.unpack.outputs.pr_number }}
+        with:
+          script: |
+            const pr = Number(process.env.PR_NUMBER);
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const url = `https://${owner.toLowerCase()}.github.io/${repo}/pr-${pr}/`;
+            const marker = '<!-- game-preview -->';
+            const body = [
+              marker,
+              '### ▶ Playable preview',
+              '',
+              `**${url}**`,
+              '',
+              'Portrait, single-tap. Open it on a phone or narrow your browser window.',
+              '',
+              `Built from ${context.payload.workflow_run.head_sha.slice(0, 7)}.`,
+              'Pages can take a minute to serve a brand-new path.',
+            ].join('\n');
+
+            const existing = await github.rest.issues.listComments({
+              owner, repo, issue_number: pr, per_page: 100,
+            });
+            const mine = existing.data.find(c => c.body && c.body.includes(marker));
+            if (mine) {
+              await github.rest.issues.updateComment({
+                owner, repo, comment_id: mine.id, body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner, repo, issue_number: pr, body,
+              });
+            }

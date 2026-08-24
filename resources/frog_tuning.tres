@@ -1,0 +1,27 @@
+[gd_resource type="Resource" script_class="FrogTuning" load_steps=2 format=3 uid="uid://cfrogtuning01"]
+
+[ext_resource type="Script" path="res://scripts/game/frog_tuning.gd" id="1_script"]
+
+[resource]
+script = ExtResource("1_script")
+roll_radius = 72.0
+randomize_radius = true
+radius_min = 52.0
+radius_max = 104.0
+rotation_to_velocity_ratio = 1.0
+air_spin_follows_velocity = true
+drive_direction = 1
+grounded_drive_accel = 280.0
+roll_resistance = 90.0
+max_roll_speed = 400.0
+overspeed_decay = 900.0
+gravity = 2200.0
+max_fall_speed = 2600.0
+facing_flip_deadzone = 25.0
+kick_impulse = 1250.0
+max_drag_px = 220.0
+aim_deadzone_px = 18.0
+min_kick_power = 0.35
+kick_cancels_opposing = true
+kick_cooldown_sec = 0.22
+air_kicks_allowed = -1

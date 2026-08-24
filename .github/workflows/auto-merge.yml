@@ -1,0 +1,54 @@
+name: Auto Merge
+
+# Turns on GitHub's native auto-merge for a PR — but ONLY once a human has
+# confirmed they played the preview build and it does what they wanted.
+#
+# WHY THIS IS GATED
+#
+# A PR is reviewed by another developer. If auto-merge were enabled the moment
+# a PR opened, it could go green and merge itself the instant that approval
+# landed — before anyone had opened the preview build. That would skip the
+# human testing step entirely, which is the whole point of building previews.
+#
+# So the gate is an explicit human action: add the `tested` label. Nothing
+# else turns auto-merge on. Adding the label says "I played this build and I
+# want it in."
+#
+# Auto-merge still cannot bypass branch protection — GitHub merges only once
+# every required check and review is satisfied. The label is an ADDITIONAL
+# gate, not a replacement for them.
+
+on:
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  enable-auto-merge:
+    name: enable-auto-merge
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: github.event.label.name == 'tested' && github.event.pull_request.draft == false
+    steps:
+      - name: Enable auto-merge (squash)
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            try {
+              await github.graphql(
+                `mutation($id: ID!) {
+                   enablePullRequestAutoMerge(input: {
+                     pullRequestId: $id,
+                     mergeMethod: SQUASH
+                   }) { clientMutationId }
+                 }`,
+                { id: pr.node_id }
+              );
+              core.info(`auto-merge (squash) enabled on PR #${pr.number} — a human marked it tested`);
+            } catch (error) {
+              core.warning(`could not enable auto-merge: ${error.message}`);
+            }

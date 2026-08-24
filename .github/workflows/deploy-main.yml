@@ -1,0 +1,90 @@
+name: Deploy Main
+
+# Publishes the current state of `main` to the Pages root, so there is always
+# one canonical playable build. Without this, only per-PR previews would exist
+# and there would be nowhere to point someone after a merge.
+
+on:
+  push:
+    branches: [main]
+  # Lets a maintainer re-publish without pushing a commit.
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# Shares the writer lock with the preview workflows: only one job may rewrite
+# the gh-pages branch at a time.
+concurrency:
+  group: gh-pages-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: deploy-main
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache Godot toolchain
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.godot-toolchain
+            ~/.local/share/godot/export_templates
+          key: toolchain-${{ runner.os }}-${{ hashFiles('scripts/bootstrap.sh') }}
+
+      - name: Bootstrap environment
+        run: ./scripts/bootstrap.sh
+
+      - name: Import project assets
+        run: $HOME/.godot-toolchain/bin/godot --headless --import --path .
+
+      - name: Export Web build
+        timeout-minutes: 12
+        run: |
+          mkdir -p build/web
+          $HOME/.godot-toolchain/bin/godot --headless --path . \
+            --export-release "Web" build/web/index.html
+
+      - name: Stamp the build
+        run: |
+          bash .github/stamp-build.sh build/web "main" "${GITHUB_SHA}"
+
+      - name: Publish to the Pages root
+        run: |
+          set -e
+          git clone --quiet --depth 1 --branch gh-pages \
+            "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" pages \
+            || { mkdir -p pages && cd pages && git init -q && git checkout -q -b gh-pages \
+                 && git remote add origin "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" && cd ..; }
+
+          cd pages
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # Replace only the root build; per-PR previews under pr-*/ survive.
+          find . -maxdepth 1 -type f ! -name '.nojekyll' ! -name 'CNAME' -delete
+          cp -R ../build/web/. .
+          touch .nojekyll
+
+          # Single orphan commit: the engine wasm is byte-identical between
+          # builds so git dedupes it anyway, but this keeps history flat.
+          git checkout -q --orphan republish
+          git add -A
+          git commit -q -m "Deploy main (${GITHUB_SHA::7})"
+          git branch -qM gh-pages
+
+          for attempt in 1 2 3 4; do
+            if git push -q --force origin gh-pages; then echo "deployed"; exit 0; fi
+            echo "push rejected (attempt ${attempt}); retrying"
+            sleep $((attempt * 3))
+          done
+          echo "::error::could not deploy after 4 attempts"
+          exit 1
+
+      - name: Where it went
+        run: |
+          echo "### Deployed" >> "$GITHUB_STEP_SUMMARY"
+          echo "Root build updated from \`${GITHUB_SHA::7}\`." >> "$GITHUB_STEP_SUMMARY"
