@@ -4,8 +4,10 @@ A frog that rolls like a wheel, and one button.
 
 Tap to jump. **Where the frog is in its roll when you tap decides what the jump
 does** — feet at the bottom pops you straight up, feet swung forward launches
-you along a flat, fast arc, feet up top and you whiff. Roll down a slope, time
-the tap, clear the gap, land rolling, do it again. Get as far as you can.
+you along a flat, fast arc, feet up top and you whiff. **How long you hold
+decides how hard** — a flick is a hop, a full press is a full jump. Roll down a
+slope, time the press, clear the gap, land rolling, do it again. Get as far as
+you can.
 
 Nothing in the game explains any of that, and that is the point. This is a
 prototype built to answer one question: **does the roll-timing jump read as
@@ -45,7 +47,7 @@ The import step is not optional on a clone that has never been opened: GUT's
 test run aborts with "Some GUT class_names have not been imported" instead of
 failing a test.
 
-The suite must report **50 tests passing across 5 scripts**. Do this even when
+The suite must report **62 tests passing across 6 scripts**. Do this even when
 your task looks trivial — a failure you see *after* editing is ambiguous unless
 you know the baseline was clean.
 
@@ -92,7 +94,8 @@ first run, and a cancelled run reports no failures *and* no successes.
 
 ## Playing it
 
-- **Tap / click / space** — jump. That is the entire input.
+- **Tap / click / space** — jump. That is the entire input. Press fires it;
+  keep holding for more power.
 - Falling below the terrain ends the run; it restarts on its own after a beat.
 - The only score is distance.
 
@@ -108,9 +111,15 @@ Then check you have not broken the skill gradient:
 godot --headless --path . -s tools/tuning_probe.gd
 ```
 
-It plays the real scene under fixed tap policies and prints how far each gets.
-Timed play must beat untimed play by a wide margin. `CLAUDE.md` §8 has the
-baseline numbers and the two dials most likely to break it.
+It plays the real scene under fixed tap policies and prints how far each gets,
+then sweeps the frog's radius with skilled play held fixed. Timed play must beat
+untimed play by a wide margin. `CLAUDE.md` §8 has the baseline numbers and the
+dials most likely to break them.
+
+The frog's radius is deliberately **randomised every run** — it is the hardest
+number in the game to guess, so each run is a data point rather than a
+committed decision. Pin it in `frog_tuning.tres` once the spread has told you
+where to sit.
 
 ## Layout
 

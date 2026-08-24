@@ -37,23 +37,42 @@ static func feet_phase_deg(body_rotation: float, facing: int) -> float:
 	return rad_to_deg(atan2(feet.dot(forward), feet.dot(Vector2.DOWN)))
 
 
+## Turns a hold length, already normalised to 0..1, into a power multiplier
+## running from [member FrogTuning.min_tap_power] at a flick to 1.0 at a full
+## press. Separate from [method solve] so the frog can show a charge meter, and
+## so the ramp can be tested on its own.
+static func charge_multiplier(tuning: FrogTuning, charge: float) -> float:
+	var shaped: float = pow(
+		clampf(charge, 0.0, 1.0), maxf(tuning.charge_curve_exponent, 0.001)
+	)
+	return lerpf(clampf(tuning.min_tap_power, 0.0, 1.0), 1.0, shaped)
+
+
 ## Resolves a tap into a new velocity. Allocates one JumpOutcome; call
 ## [method solve_into] from anything running every frame.
+##
+## [param charge] is how long the player held the button, 0 for the shortest
+## possible flick and 1 for a full press. It scales power only — where the jump
+## goes is the clock's business, not the finger's.
 static func solve(
-	tuning: FrogTuning, body_rotation: float, velocity: Vector2, facing: int
+	tuning: FrogTuning, body_rotation: float, velocity: Vector2, facing: int,
+	charge: float = 1.0
 ) -> JumpOutcome:
-	return solve_into(JumpOutcome.new(), tuning, body_rotation, velocity, facing)
+	return solve_into(JumpOutcome.new(), tuning, body_rotation, velocity, facing, charge)
 
 
 ## As [method solve], but writes into [param out] and returns it, so a caller
 ## holding one instance never allocates.
 static func solve_into(
-	out: JumpOutcome, tuning: FrogTuning, body_rotation: float, velocity: Vector2, facing: int
+	out: JumpOutcome, tuning: FrogTuning, body_rotation: float, velocity: Vector2,
+	facing: int, charge: float = 1.0
 ) -> JumpOutcome:
 	out.clear()
 	var sign_facing: float = 1.0 if facing >= 0 else -1.0
 	out.velocity = velocity
 	out.phase_deg = feet_phase_deg(body_rotation, facing)
+	out.charge = clampf(charge, 0.0, 1.0)
+	var press: float = charge_multiplier(tuning, out.charge)
 
 	var half_arc: float = maxf(tuning.window_arc_deg, 0.0) * 0.5
 	var rel: float = _wrap_deg(out.phase_deg - tuning.window_centre_offset_deg)
@@ -66,7 +85,9 @@ static func solve_into(
 		if tuning.mistimed_tap == FrogTuning.MistimedTap.NO_OP:
 			return out
 		out.fired = true
-		out.power = tuning.base_jump_impulse * tuning.mistimed_jump_multiplier
+		var whiff_full: float = tuning.base_jump_impulse * tuning.mistimed_jump_multiplier
+		out.full_impulse = Vector2.UP * whiff_full
+		out.power = whiff_full * press
 		out.velocity = _apply_impulse(tuning, velocity, Vector2.UP * out.power)
 		return out
 
@@ -76,7 +97,9 @@ static func solve_into(
 		# Forward half. The later the tap, the flatter and the stronger.
 		var shaped: float = pow(out.window_t, maxf(tuning.forward_curve_exponent, 0.001))
 		out.tilt_deg = shaped * tuning.forward_max_tilt_deg
-		out.power = tuning.base_jump_impulse * lerpf(1.0, tuning.forward_boost_multiplier, shaped)
+		out.power = tuning.base_jump_impulse * lerpf(
+			1.0, tuning.forward_boost_multiplier, shaped
+		)
 	else:
 		# Backward half. Existing forward momentum blends against the backward
 		# angle and, past backward_dominance_speed, cancels it entirely: the tap
@@ -98,6 +121,11 @@ static func solve_into(
 	out.fired = true
 	# Tilt is measured off straight up, rotated toward the direction of travel.
 	var direction: Vector2 = Vector2.UP.rotated(deg_to_rad(out.tilt_deg * sign_facing))
+	# out.power is the full-press strength up to here. Record the whole impulse
+	# before scaling it down, so the frog can feed in the remainder while the
+	# player keeps holding.
+	out.full_impulse = direction * out.power
+	out.power *= press
 	out.velocity = _apply_impulse(tuning, velocity, direction * out.power)
 	return out
 

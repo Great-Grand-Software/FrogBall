@@ -32,6 +32,14 @@ var power: float = 0.0
 ## How much forward momentum ate a backward-angled tap, 0 to 1.
 var backward_suppression: float = 0.0
 
+## How long the player held the button, 0 for a flick and 1 for a full press.
+var charge: float = 0.0
+
+## The impulse this jump would apply at a FULL press, px/s. The frog fires a
+## fraction of it immediately and feeds in the rest for as long as the button
+## is held, so it needs the whole vector, not just the part already spent.
+var full_impulse: Vector2 = Vector2.ZERO
+
 
 ## Puts every field back to its default. Called before each solve so a reused
 ## instance can never leak a value from the previous tap.
@@ -44,3 +52,5 @@ func clear() -> void:
 	tilt_deg = 0.0
 	power = 0.0
 	backward_suppression = 0.0
+	charge = 0.0
+	full_impulse = Vector2.ZERO

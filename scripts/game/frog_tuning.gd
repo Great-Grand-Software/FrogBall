@@ -28,6 +28,30 @@ enum MistimedTap {
 ## a rhythm a player can actually read and tap against.
 @export_range(4.0, 256.0, 1.0, "or_greater") var roll_radius: float = 72.0
 
+## Pick a fresh radius at random for every run, between the two values below.
+## Radius is the hardest dial in the game to guess at, because it trades spin
+## rate against readability and both only show up in play. Rolling a new one
+## each run turns "what number should this be" into something you feel over a
+## dozen runs instead of something you argue about. Turn it off and pin
+## [member roll_radius] once the range has told you where to sit.
+@export var randomize_radius: bool = true
+
+## Smallest radius a random run may roll, px. Below roughly 48 the frog spins
+## faster than a player can read, and the jump window stops being tappable.
+@export_range(4.0, 256.0, 1.0, "or_greater") var radius_min: float = 52.0
+
+## Largest radius a random run may roll, px. A very large frog rolls over
+## terrain that was meant to need a jump.
+@export_range(4.0, 256.0, 1.0, "or_greater") var radius_max: float = 104.0
+
+## Where the feet sit on the clock at the start of a run, in degrees, using the
+## same convention as everything else: 0 is 6 o'clock, +90 is 3 o'clock. 45 puts
+## the frog on 4:30 standing still, so the player's very first tap — before they
+## know there is a window at all — is a good forward launch rather than a coin
+## flip. First impressions are the one thing a no-tutorial prototype cannot
+## afford to leave to chance.
+@export_range(-90.0, 90.0, 1.0) var start_phase_deg: float = 45.0
+
 ## Multiplier on rolling without slipping (angular = linear / radius * this).
 ## 1.0 is physically honest; higher just looks spinnier at the same speed.
 @export_range(0.0, 4.0, 0.01, "or_greater") var rotation_to_velocity_ratio: float = 1.0
@@ -79,8 +103,30 @@ enum MistimedTap {
 ## Shifts the window off bottom-dead-centre. Positive rotates it toward 3.
 @export_range(-90.0, 90.0, 1.0) var window_centre_offset_deg: float = 0.0
 
-## Straight-up impulse for a perfectly neutral 6 o'clock tap, px/s.
+## Straight-up impulse for a perfectly neutral 6 o'clock tap, px/s, at full
+## charge. A shorter press scales this down — see [member min_tap_power].
 @export_range(100.0, 3000.0, 10.0, "or_greater") var base_jump_impulse: float = 900.0
+
+# --- how long you hold ------------------------------------------------------
+# The clock decides WHERE the jump goes. The press decides HOW HARD. They are
+# deliberately separate: one is timing, the other is pressure, and a player can
+# find one without the other.
+
+## Hold time that counts as a full press, seconds. Anything longer adds nothing.
+##
+## Keep this SHORT. The remainder of the jump is fed in over this window, and a
+## low forward arc can land before a slow ramp finishes — which silently eats
+## most of the boost and flattens the whole skill gradient.
+@export_range(0.05, 1.5, 0.01, "or_greater") var max_hold_sec: float = 0.15
+
+## Power multiplier for the shortest possible tap. This is the floor of the
+## charge ramp: a flick of the finger should be a hop, not a launch, but it must
+## still visibly do something or the input reads as dropped.
+@export_range(0.05, 1.0, 0.01) var min_tap_power: float = 0.55
+
+## Shape of the charge ramp. 1.0 is linear. Above 1 makes a nearly-full press
+## necessary for a full jump; below 1 makes most presses feel strong.
+@export_range(0.2, 4.0, 0.05, "or_greater") var charge_curve_exponent: float = 1.0
 
 # --- the forward half: 6 o'clock toward 3 ----------------------------------
 

@@ -145,10 +145,12 @@ func start_run() -> void:
 	_plan.advance_to(_plan.start_point().x + level_tuning.generate_ahead)
 	refresh_terrain()
 
+	# The frog rolls its own radius, so it places itself on the surface point
+	# rather than the screen guessing how tall it is this run.
 	var spawn: Vector2 = _plan.start_point()
-	spawn.y -= maxf(frog_tuning.roll_radius, 1.0) + 2.0
+	_frog.set_run_seed(run_seed)
 	_frog.reset_to(spawn)
-	_camera.global_position = spawn + Vector2(0.0, camera_vertical_offset)
+	_camera.global_position = spawn + Vector2(0.0, camera_vertical_offset - _frog.radius())
 
 	_run_metres = 0
 	_stuck_for = 0.0
@@ -212,23 +214,35 @@ func _process(delta: float) -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
-	# One tap is the entire input surface. A single touch, a single left click,
-	# or space on a desktop keyboard, which is a convenience and never required.
-	var tapped: bool = false
+	# One button is the entire input surface: a single touch, a single left
+	# click, or space, which is a desktop convenience and never required.
+	#
+	# Press and release are BOTH meaningful. Pressing starts a charge; releasing
+	# fires the jump, reading how long it was held for power and the clock angle
+	# at that instant for direction. A flick is a hop, a full press is a launch.
+	var pressed: bool = false
+	var is_tap: bool = false
 	if event is InputEventScreenTouch:
 		var touch := event as InputEventScreenTouch
-		tapped = touch.pressed and touch.index == 0
+		is_tap = touch.index == 0
+		pressed = touch.pressed
 	elif event is InputEventMouseButton:
 		var mouse := event as InputEventMouseButton
-		tapped = mouse.pressed and mouse.button_index == MOUSE_BUTTON_LEFT
+		is_tap = mouse.button_index == MOUSE_BUTTON_LEFT
+		pressed = mouse.pressed
 	elif event is InputEventKey:
 		var key := event as InputEventKey
-		tapped = key.pressed and not key.echo and key.keycode == KEY_SPACE
-	if not tapped:
+		is_tap = key.keycode == KEY_SPACE and not key.echo
+		pressed = key.pressed
+	if not is_tap:
 		return
 	get_viewport().set_input_as_handled()
-	if _run_active:
-		_frog.queue_tap()
+	if not _run_active:
+		return
+	if pressed:
+		_frog.begin_tap()
+	else:
+		_frog.release_tap()
 
 
 func _build_polygon_pool() -> void:
@@ -267,8 +281,12 @@ func _refresh_distance(metres: int) -> void:
 
 
 func _refresh_debug() -> void:
-	_debug_label.text = "feet %+.0f deg   speed %.0f   %s" % [
+	# Radius is in here because it is randomised per run: when a run feels good
+	# or awful, the first thing you want to know is which frog you were riding.
+	_debug_label.text = "r %.0f   feet %+.0f deg   charge %.0f%%   speed %.0f   %s" % [
+		_frog.radius(),
 		_frog.feet_phase_deg(),
+		_frog.charge() * 100.0,
 		_frog.linear_velocity.length(),
 		"ground" if _frog.grounded else "air",
 	]

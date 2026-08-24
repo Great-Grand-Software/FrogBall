@@ -141,3 +141,99 @@ func test_a_frog_knocked_backward_rolls_itself_back() -> void:
 	await wait_physics_frames(120)
 	assert_gt(frog.linear_velocity.x, 0.0, "the frog is heading back down the level")
 	assert_true(_screen.is_running(), "and it recovered rather than dying")
+
+
+# --- the new dials ---------------------------------------------------------
+
+
+func test_a_run_starts_the_frog_on_the_briefed_clock_angle() -> void:
+	# Standing on 4:30 means the player's very first tap — made before they know
+	# there is a window at all — is a good forward launch, not a coin flip.
+	_screen.run_seed = A_PINNED_SEED
+	_screen.start_run()
+	var frog: FrogBody = _screen.get_node("%Frog")
+	await wait_physics_frames(2)
+	assert_almost_eq(
+		frog.feet_phase_deg(), _screen.frog_tuning.start_phase_deg, 6.0, "starts near 4:30"
+	)
+
+
+func test_each_run_rolls_a_different_radius() -> void:
+	# Randomised on purpose: radius trades spin rate against readability and
+	# only play can settle it, so every run is a fresh data point.
+	var frog: FrogBody = _screen.get_node("%Frog")
+	var seen: Dictionary = {}
+	for _run: int in range(12):
+		_screen.start_run()
+		seen[roundi(frog.radius())] = true
+	assert_gt(seen.size(), 1, "twelve runs are not all the same frog")
+
+
+func test_a_rolled_radius_stays_inside_the_tuned_range() -> void:
+	var frog: FrogBody = _screen.get_node("%Frog")
+	var tuning: FrogTuning = _screen.frog_tuning
+	for _run: int in range(20):
+		_screen.start_run()
+		assert_between(frog.radius(), tuning.radius_min, tuning.radius_max, "within range")
+
+
+func test_the_frog_is_placed_on_the_surface_whatever_size_it_rolled() -> void:
+	# The screen no longer guesses how tall the frog is, so a big roll must not
+	# spawn it buried in the ground or dropped from a height.
+	_screen.run_seed = A_PINNED_SEED
+	_screen.start_run()
+	var frog: FrogBody = _screen.get_node("%Frog")
+	var surface: float = _screen.terrain_plan().start_point().y
+	await wait_physics_frames(4)
+	assert_almost_eq(
+		frog.global_position.y, surface - frog.radius(), 6.0, "sitting exactly on top"
+	)
+
+
+func test_holding_longer_jumps_higher() -> void:
+	# The apex has to be tracked across the WHOLE flight, released mid-way: a
+	# long hold has already peaked by the time the button comes up, so measuring
+	# only after release reports the descent.
+	var apexes: Array[float] = []
+	for hold: int in [1, 24]:
+		_screen.run_seed = A_PINNED_SEED
+		_screen.start_run()
+		var frog: FrogBody = _screen.get_node("%Frog")
+		await wait_physics_frames(20)
+		var resting: float = frog.global_position.y
+		var highest: float = 0.0
+		frog.begin_tap()
+		for step: int in range(70):
+			if step == hold:
+				frog.release_tap()
+			await wait_physics_frames(1)
+			highest = maxf(highest, resting - frog.global_position.y)
+		apexes.append(highest)
+	assert_gt(apexes[1], apexes[0] * 1.4, "a full press clears far more than a flick")
+
+
+func test_a_press_fires_the_jump_immediately() -> void:
+	# The press is the input. A jump that waited for release would fire at an
+	# angle the frog had already spun past, which is unaimable — the whole game
+	# is timing a rotation you can see.
+	_screen.run_seed = A_PINNED_SEED
+	_screen.start_run()
+	var frog: FrogBody = _screen.get_node("%Frog")
+	await wait_physics_frames(20)
+	var resting: float = frog.global_position.y
+	frog.begin_tap()
+	await wait_physics_frames(4)
+	assert_lt(frog.global_position.y, resting - 10.0, "already airborne, no charge-up wait")
+
+
+func test_releasing_early_cuts_the_jump_short() -> void:
+	# Same angle, same everything, only the length of the press differs.
+	_screen.run_seed = A_PINNED_SEED
+	_screen.start_run()
+	var frog: FrogBody = _screen.get_node("%Frog")
+	await wait_physics_frames(20)
+	frog.begin_tap()
+	await wait_physics_frames(2)
+	frog.release_tap()
+	var cut: float = absf(frog.linear_velocity.y)
+	assert_lt(cut, 0.0 + _screen.frog_tuning.base_jump_impulse, "a flick is not a full jump")

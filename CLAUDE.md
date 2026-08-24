@@ -47,7 +47,7 @@ of **every** Godot Web build; do not relax them.
 | **No 3D** | 2D only — `Control`, `Node2D`, sprites, tilemaps. |
 | **Bounded memory** | Browsers cap WebAssembly memory hard. See §4. |
 | **Fixed frame** | 1280×720 landscape, in `project.conf`. Off-shape screens get the same frame centred and letterboxed, never a responsive reflow — that is `stretch/aspect="keep"`. Landscape is load-bearing: the player has to see the run-up, the launch and the landing at once. |
-| **One tap, and nothing else** | Tap, click, or space. No tilt, no drag, no swipe, no multi-touch, no keyboard requirement. Rolling is automatic and momentum-driven — there is no input that steers speed or direction, and adding one changes what the prototype is testing. |
+| **One button, and nothing else** | Tap, click, or space. Press and release both matter — press fires the jump, holding feeds in power — but it is still ONE button. No tilt, no drag, no swipe, no multi-touch, no keyboard requirement. Rolling is automatic and momentum-driven; there is no input that steers speed or direction, and adding one changes what the prototype is testing. |
 | **No tutorial, ever** | No hint text, no onboarding, no arrows, no "nice timing" feedback, no on-screen indication of where the jump window is. The prototype's entire question is whether the timing reads with nothing explained; anything that explains it answers the question for the player. The distance readout is a score, not a hint, and is the only text a run shows. |
 | **Monochrome** | Off-white ink on near-black. Line art, no rasters. |
 
@@ -217,6 +217,18 @@ a 45° launch and roughly double the ground covered. Tap in the top half and you
 whiff. The point of the prototype is to find out whether a player with no
 instructions discovers that gradient within a few seconds of failing at it.
 
+**How long you hold is the second half of the input.** The press fires the jump
+immediately, at its weakest, in the direction the clock was showing at that
+instant. Keep holding and the rest of the power feeds in over `max_hold_sec`. A
+flick is a hop; a full press is a full jump. The clock decides *where*, the
+finger decides *how hard*, and the two are independent on purpose.
+
+The jump has to fire on the PRESS, not the release. A jump that resolved on
+release would read the clock at a moment the frog had already spun past — at
+cruise the body turns roughly 70° during a full hold, which is most of the
+window. Resolving on release was tried and measured: it flattened the skill
+gradient to nothing, because a fully-charged jump could not be aimed.
+
 **The backward half is deliberately not a mirror.** Tapping toward 9 o'clock
 only reverses a frog that was barely moving; a frog with speed just gets shoved
 near-vertical instead, because forward momentum blends against the backward
@@ -232,12 +244,22 @@ is that the feel is iterable without touching code.
 
 The two dials that matter most, and are easiest to get wrong:
 
-- **`roll_radius`** is not cosmetic. Rolling without slipping ties spin to
-  speed, so a small frog spins fast; at radius 32 the frog turned three times a
-  second and the 4:30 sweet spot passed in under one physics frame, which made
-  the mechanic untappable. 72 gives about a three-quarter-second revolution at
-  cruise. If you shrink the frog, you are making the game harder to *perceive*,
+- **Radius is randomised per run** (`randomize_radius`, `radius_min`,
+  `radius_max`), because it is the dial nobody can guess: it trades spin rate
+  against readability and only play settles it. Every run is a data point. Pin
+  it with `randomize_radius = false` once the range has told you where to sit.
+  Radius is not cosmetic — rolling without slipping ties spin to speed, so a
+  small frog spins fast; at radius 32 the frog turned three times a second and
+  the 4:30 sweet spot passed in under one physics frame, which made the
+  mechanic untappable. Shrinking the frog makes the game harder to *perceive*,
   not harder to *play*.
+- **`max_hold_sec` must stay short.** The rest of the jump feeds in over that
+  window, and a low forward arc can land before a slow ramp finishes — which
+  silently eats the boost and flattens the gradient. 0.32 did exactly that;
+  0.15 does not.
+- **`start_phase_deg`** puts the frog on 4:30 standing still, so a player's
+  very first press — made before they know there is a window — is a good
+  forward launch rather than a coin flip.
 - **`drive_direction`** is a property of the run, not of the frog. It must not
   follow the direction of travel: tying the self-drive to travel means one
   mistimed opening tap reverses the frog and then accelerates it backward for
@@ -250,12 +272,25 @@ at the very edge of the window should be punished:
 ```
 policy   | median m | note
 ---------|----------|------------------------------------------------
-never    |     20.6 | baseline: no input at all
-random   |     23.3 | mashing
-neutral  |     39.1 | tapping at 6 o'clock, untimed
-boost    |     86.4 | tapping near 4:30 — should win by a lot
-late     |     20.6 | tapping at the 3 o'clock edge — should be punished
+never    |     20.4 | baseline: no input at all
+random   |     26.2 | mashing
+neutral  |     26.1 | pressing at 6 o'clock, untimed
+boost    |     65.3 | pressing near 4:30 — should win by a lot
+late     |     26.2 | pressing at the 3 o'clock edge — should be punished
 ```
 
 If `boost` stops beating `never` by a wide margin, the change broke the game
 rather than tuning it.
+
+The probe also sweeps radius with the skilled policy held fixed. Five seeds per
+row is noisy, so read the shape rather than any single number — but the shape
+says small frogs lose (they outspin the player) and the usable band starts
+around 52:
+
+```
+radius |  40  |  52  |  64  |  76  |  88  | 104  | 124
+median | 30.8 | 70.0 | 57.7 | 59.2 | 38.8 | 38.8 | 68.9
+```
+
+124 scoring well is not a recommendation: a frog that big rolls over terrain
+that was supposed to need a jump, which is a different game.
