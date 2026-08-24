@@ -1,0 +1,47 @@
+; Engine configuration file.
+; Frog Ball. Started from godot-web-template.
+
+config_version=5
+
+[application]
+
+config/name="Frog Ball"
+run/main_scene="res://scenes/main_menu.tscn"
+config/icon="res://assets/icon.svg"
+config/features=PackedStringArray("4.7", "GL Compatibility")
+
+[autoload]
+
+GameState="*res://scripts/autoload/game_state.gd"
+
+[display]
+
+; Landscape, 16:9. The frog rolls rightward, so the frame has to show the
+; run-up, the launch and the landing at once — a portrait frame shows barely
+; one segment and the player cannot read the gap before committing. Every
+; other screen gets this same frame, centred and letterboxed, rather than a
+; responsive reflow. That is stretch/aspect="keep".
+; These values are asserted by scripts/check-constraints.sh against
+; project.conf — change them in both places, deliberately.
+window/size/viewport_width=1280
+window/size/viewport_height=720
+window/size/resizable=true
+window/stretch/mode="canvas_items"
+window/stretch/aspect="keep"
+window/handheld/orientation=0
+
+[rendering]
+
+; gl_compatibility is what WebGL 2.0 needs. Do not change without reading
+; CLAUDE.md §2.
+renderer/rendering_method="gl_compatibility"
+renderer/rendering_method.mobile="gl_compatibility"
+environment/defaults/default_clear_color=Color(0.106, 0.106, 0.106, 1)
+; Required by the Web preset's mobile VRAM compression setting.
+textures/vram_compression/import_etc2_astc=true
+
+[threads]
+
+; The Web target is single-threaded: GitHub Pages cannot serve the COOP/COEP
+; headers that Godot's threaded Web export requires.
+worker_pool/max_threads=0

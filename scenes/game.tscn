@@ -1,0 +1,65 @@
+[gd_scene load_steps=6 format=3 uid="uid://bfrogballrun00"]
+
+[ext_resource type="Script" path="res://scripts/ui/frog_ball_screen.gd" id="1_screen"]
+[ext_resource type="Script" path="res://scripts/game/frog_body.gd" id="2_frog"]
+[ext_resource type="Resource" path="res://resources/frog_tuning.tres" id="3_frogtune"]
+[ext_resource type="Resource" path="res://resources/level_tuning.tres" id="4_leveltune"]
+
+[sub_resource type="CircleShape2D" id="CircleShape2D_frog"]
+radius = 72.0
+
+[node name="FrogBallScreen" type="Node2D"]
+script = ExtResource("1_screen")
+frog_tuning = ExtResource("3_frogtune")
+level_tuning = ExtResource("4_leveltune")
+
+[node name="Terrain" type="StaticBody2D" parent="."]
+unique_name_in_owner = true
+
+[node name="Frog" type="RigidBody2D" parent="."]
+unique_name_in_owner = true
+script = ExtResource("2_frog")
+
+[node name="Shape" type="CollisionShape2D" parent="Frog"]
+unique_name_in_owner = true
+shape = SubResource("CircleShape2D_frog")
+
+[node name="Camera" type="Camera2D" parent="."]
+unique_name_in_owner = true
+
+[node name="Hud" type="CanvasLayer" parent="."]
+
+[node name="Fade" type="ColorRect" parent="Hud"]
+unique_name_in_owner = true
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+color = Color(0.04, 0.04, 0.04, 0)
+
+[node name="Distance" type="Label" parent="Hud"]
+unique_name_in_owner = true
+anchors_preset = 10
+anchor_right = 1.0
+offset_left = 28.0
+offset_top = 20.0
+offset_right = -28.0
+offset_bottom = 52.0
+grow_horizontal = 2
+mouse_filter = 2
+text = "0 M    BEST 0 M"
+
+[node name="Debug" type="Label" parent="Hud"]
+unique_name_in_owner = true
+anchors_preset = 10
+anchor_right = 1.0
+offset_left = 28.0
+offset_top = 56.0
+offset_right = -28.0
+offset_bottom = 88.0
+grow_horizontal = 2
+mouse_filter = 2
+visible = false
+text = ""

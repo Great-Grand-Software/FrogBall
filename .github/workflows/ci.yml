@@ -1,0 +1,439 @@
+name: CI
+
+# Every job here is a required status check on `main`. The four check names
+# are: lint, unit-tests, smoke-test, web-export.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# A newer push to the same PR makes the in-flight run obsolete.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------------
+  # 0. Hard constraints
+  #
+  # Deliberately needs no toolchain and no credentials, so it is the fastest
+  # signal on a PR and cannot break because a secret expired. Replaces the
+  # mechanical half of what an LLM reviewer used to check; the judgement half
+  # belongs to the human reviewer.
+  # ---------------------------------------------------------------------
+  constraints:
+    name: constraints
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check CLAUDE.md hard constraints
+        run: ./scripts/check-constraints.sh
+
+  # ---------------------------------------------------------------------
+  # Shared environment, built once from the single source of truth.
+  # ---------------------------------------------------------------------
+  bootstrap:
+    name: bootstrap
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache Godot toolchain
+        id: toolchain-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.godot-toolchain
+            ~/.local/share/godot/export_templates
+          key: toolchain-${{ runner.os }}-${{ hashFiles('scripts/bootstrap.sh') }}
+
+      - name: Bootstrap environment
+        run: ./scripts/bootstrap.sh
+
+      - name: Verify environment matches CI expectations
+        run: ./scripts/bootstrap.sh --check
+
+  # ---------------------------------------------------------------------
+  # 1. Lint
+  # ---------------------------------------------------------------------
+  lint:
+    name: lint
+    needs: bootstrap
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore Godot toolchain
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.godot-toolchain
+            ~/.local/share/godot/export_templates
+          key: toolchain-${{ runner.os }}-${{ hashFiles('scripts/bootstrap.sh') }}
+
+      - name: Bootstrap environment
+        run: ./scripts/bootstrap.sh
+
+      - name: gdlint
+        run: |
+          export PATH="$HOME/.godot-toolchain/bin:$PATH"
+          gdlint .
+
+  # ---------------------------------------------------------------------
+  # 2. Unit tests (GUT, headless)
+  # ---------------------------------------------------------------------
+  unit-tests:
+    name: unit-tests
+    needs: bootstrap
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore Godot toolchain
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.godot-toolchain
+            ~/.local/share/godot/export_templates
+          key: toolchain-${{ runner.os }}-${{ hashFiles('scripts/bootstrap.sh') }}
+
+      - name: Bootstrap environment
+        run: ./scripts/bootstrap.sh
+
+      - name: Import project assets
+        run: $HOME/.godot-toolchain/bin/godot --headless --import --path .
+
+      - name: Run GUT suite
+        timeout-minutes: 10
+        run: |
+          set -o pipefail
+          $HOME/.godot-toolchain/bin/godot --headless --path . \
+            -s addons/gut/gut_cmdln.gd -gconfig=.gutconfig.json 2>&1 | tee gut-output.txt
+          # GUT can exit 0 while reporting failures, so assert on the summary.
+          if ! grep -q -- "---- All tests passed! ----" gut-output.txt; then
+            echo "::error::GUT reported test failures"
+            exit 1
+          fi
+
+      - name: Upload test output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gut-output
+          path: gut-output.txt
+          retention-days: 7
+
+  # ---------------------------------------------------------------------
+  # 3. Headless boot smoke test
+  # ---------------------------------------------------------------------
+  smoke-test:
+    name: smoke-test
+    needs: bootstrap
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore Godot toolchain
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.godot-toolchain
+            ~/.local/share/godot/export_templates
+          key: toolchain-${{ runner.os }}-${{ hashFiles('scripts/bootstrap.sh') }}
+
+      - name: Bootstrap environment
+        run: ./scripts/bootstrap.sh
+
+      - name: Import project assets
+        run: $HOME/.godot-toolchain/bin/godot --headless --import --path .
+
+      - name: Boot every entry-point scene headless
+        timeout-minutes: 8
+        run: |
+          set -uo pipefail
+          GODOT="$HOME/.godot-toolchain/bin/godot"
+          FAILED=0
+
+          # A scene broken badly enough can hang the engine instead of
+          # erroring, so every boot is wrapped in its own hard timeout. This
+          # fails fast and legibly rather than burning the whole job budget.
+          BOOT_TIMEOUT_SECONDS=90
+
+          # Entry scenes come from project.conf, so adding a screen is a
+          # one-line change there rather than an edit to this workflow.
+          # shellcheck source=/dev/null
+          source ./project.conf
+          for scene in ${ENTRY_SCENES}; do
+            echo "::group::booting $scene"
+            # --quit-after runs a fixed number of frames, then exits cleanly.
+            output="$(timeout "${BOOT_TIMEOUT_SECONDS}s" \
+              "$GODOT" --headless --path . --quit-after 120 "$scene" 2>&1)"
+            status=$?
+            echo "$output"
+            echo "::endgroup::"
+
+            if [ "$status" -eq 124 ]; then
+              echo "::error::$scene did not finish booting within ${BOOT_TIMEOUT_SECONDS}s"
+              FAILED=1
+            elif [ "$status" -ne 0 ]; then
+              echo "::error::$scene exited with status $status"
+              FAILED=1
+            fi
+            # Godot reports script/scene problems on stdout while still
+            # exiting 0, so the output itself has to be inspected.
+            if echo "$output" | grep -qE 'SCRIPT ERROR|ERROR:|Failed to load|Cannot open'; then
+              echo "::error::$scene produced engine errors on boot"
+              FAILED=1
+            fi
+          done
+
+          if [ "$FAILED" -ne 0 ]; then
+            exit 1
+          fi
+          echo "all entry-point scenes booted cleanly"
+
+  # ---------------------------------------------------------------------
+  # 4. Single-threaded Web export dry-run
+  # ---------------------------------------------------------------------
+  web-export:
+    name: web-export
+    needs: bootstrap
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore Godot toolchain
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.godot-toolchain
+            ~/.local/share/godot/export_templates
+          key: toolchain-${{ runner.os }}-${{ hashFiles('scripts/bootstrap.sh') }}
+
+      - name: Bootstrap environment
+        run: ./scripts/bootstrap.sh
+
+      - name: Reject threaded Web export
+        run: |
+          # Belt and braces: the preset must never enable thread support,
+          # because GitHub Pages cannot serve the required COOP/COEP headers.
+          if ! grep -q 'variant/thread_support=false' export_presets.cfg; then
+            echo "::error file=export_presets.cfg::Web preset must set variant/thread_support=false"
+            exit 1
+          fi
+
+      - name: Import project assets
+        run: $HOME/.godot-toolchain/bin/godot --headless --import --path .
+
+      - name: Export Web build
+        timeout-minutes: 12
+        run: |
+          set -o pipefail
+          mkdir -p build/web
+          $HOME/.godot-toolchain/bin/godot --headless --path . \
+            --export-release "Web" build/web/index.html 2>&1 | tee export-output.txt
+          if grep -qE 'ERROR:|SCRIPT ERROR|Failed to|Can.t open' export-output.txt; then
+            echo "::error::Web export reported errors"
+            exit 1
+          fi
+
+      - name: Enforce the build size budget
+        run: |
+          set -e
+          # The platform limits are the real constraints: GitHub refuses files
+          # over 100 MB, and a Pages site must stay under 1 GB. These are far
+          # above where we sit today (~40 MB, nearly all of it the engine
+          # template, which is byte-identical every build and therefore stored
+          # once by git). The gate exists so growth is caught by CI rather than
+          # by a broken deploy months from now.
+          HARD_TOTAL_MB=1024      # GitHub Pages site limit
+          HARD_FILE_MB=100        # GitHub per-file limit
+          WARN_TOTAL_MB=250       # well before anything breaks
+
+          total_kb="$(du -sk build/web | cut -f1)"
+          total_mb=$(( total_kb / 1024 ))
+          echo "DISK SIZE OF THE SHIPPED FILES (not runtime memory):"
+          echo "  total of all files : ${total_mb} MB   (GitHub Pages allows ${HARD_TOTAL_MB} MB)"
+
+          biggest_kb="$(du -k build/web/* | sort -rn | head -1 | cut -f1)"
+          biggest_name="$(du -k build/web/* | sort -rn | head -1 | cut -f2)"
+          biggest_mb=$(( biggest_kb / 1024 ))
+          echo "  largest single file: ${biggest_mb} MB   (GitHub rejects any file at or over ${HARD_FILE_MB} MB)"
+          echo "                       ${biggest_name}"
+
+          fail=0
+          if [ "$total_mb" -ge "$HARD_TOTAL_MB" ]; then
+            echo "::error::build is ${total_mb} MB; a GitHub Pages site must stay under ${HARD_TOTAL_MB} MB"
+            fail=1
+          fi
+          if [ "$biggest_mb" -ge "$HARD_FILE_MB" ]; then
+            echo "::error::${biggest_name} is ${biggest_mb} MB; GitHub refuses files at or over ${HARD_FILE_MB} MB"
+            fail=1
+          fi
+          if [ "$total_mb" -ge "$WARN_TOTAL_MB" ] && [ "$fail" -eq 0 ]; then
+            echo "::warning::Advisory only, nothing failed: the build totals ${total_mb} MB, past the ${WARN_TOTAL_MB} MB soft budget (about a quarter of the ${HARD_TOTAL_MB} MB Pages limit). Worth a look at asset sizes."
+          fi
+          [ "$fail" -eq 0 ] || exit 1
+          echo "within budget"
+
+      - name: Verify the export used the single-threaded template
+        run: |
+          set -e
+          for f in index.html index.js index.wasm index.pck; do
+            if [ ! -s "build/web/$f" ]; then
+              echo "::error::missing or empty export artifact: $f"
+              exit 1
+            fi
+          done
+
+          # The definitive check: the exported wasm must be byte-identical to
+          # the nothreads template. A threaded export would not match.
+          python3 - <<'PY'
+          import hashlib, pathlib, re, sys, zipfile
+
+          # Version comes from the workflow env, so bumping Godot is a one-line
+          # change at the top of this file rather than a hunt through scripts.
+          # scripts/bootstrap.sh is the single source of truth for tool
+          # versions, so read it from there rather than duplicating the pin.
+          boot = pathlib.Path("scripts/bootstrap.sh").read_text()
+          version = re.search(r'^readonly GODOT_VERSION="([^"]+)"', boot, re.M).group(1)
+          tpl = (
+              pathlib.Path.home()
+              / ".local/share/godot/export_templates"
+              / f"{version}.stable"
+              / "web_nothreads_release.zip"
+          )
+          built = pathlib.Path("build/web/index.wasm").read_bytes()
+          with zipfile.ZipFile(tpl) as z:
+              name = next(n for n in z.namelist() if n.endswith(".wasm"))
+              expected = z.read(name)
+
+          got_hash = hashlib.sha256(built).hexdigest()
+          want_hash = hashlib.sha256(expected).hexdigest()
+          print(f"nothreads template wasm: {want_hash}")
+          print(f"exported           wasm: {got_hash}")
+          if got_hash != want_hash:
+              print("::error::exported wasm does not match the single-threaded template")
+              sys.exit(1)
+          print("confirmed: single-threaded Web export")
+          PY
+
+      - name: Report build size
+        run: |
+          echo "### Web export size" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          du -h build/web/* | sort -h >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Record PR number for the preview deployment
+        if: github.event_name == 'pull_request'
+        # Deliberately NOT a dotfile: actions/upload-artifact excludes hidden
+        # files by default, which would drop this silently.
+        run: echo "${{ github.event.pull_request.number }}" > build/web/pr-number.txt
+
+      - name: Upload Web build
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-build
+          path: build/web
+          retention-days: 7
+
+  # ---------------------------------------------------------------------
+  # 5. Boot the exported Web build in a real browser
+  # ---------------------------------------------------------------------
+  # A passing headless-Godot run does NOT prove the Web export works. Only
+  # loading the actual wasm in a browser catches a failed WebAssembly
+  # instantiation, a missing WebGL context, or an autoload that throws only in
+  # the web build. This check reuses the artifact from web-export rather than
+  # re-exporting.
+  web-smoke:
+    name: web-smoke
+    needs: web-export
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Download the Web build
+        uses: actions/download-artifact@v4
+        with:
+          name: web-build
+          path: build/web
+
+      - name: Install a browser
+        run: |
+          npm init -y >/dev/null 2>&1
+          npm install --no-audit --no-fund playwright@1.55.0
+          npx playwright install --with-deps chromium
+
+      - name: Boot the build and assert the engine starts
+        timeout-minutes: 8
+        run: |
+          python3 -m http.server 8099 --bind 127.0.0.1 --directory build/web &
+          SERVER_PID=$!
+          trap 'kill $SERVER_PID 2>/dev/null || true' EXIT
+          sleep 2
+
+          cat > boot-check.mjs <<'JS'
+          import { chromium } from 'playwright';
+
+          const logs = [], errs = [];
+          const browser = await chromium.launch({
+            args: ['--use-gl=angle', '--use-angle=swiftshader',
+                   '--enable-unsafe-swiftshader', '--no-sandbox'],
+          });
+          const page = await browser.newPage({ viewport: { width: 430, height: 932 } });
+          page.on('console', m => {
+            logs.push(m.text());
+            if (m.type() === 'error') errs.push(m.text());
+          });
+          page.on('pageerror', e => errs.push('PAGEERROR: ' + e.message));
+
+          await page.goto('http://127.0.0.1:8099/index.html',
+                          { waitUntil: 'load', timeout: 120000 });
+
+          // Godot boots asynchronously. Poll on the engine's OWN startup line,
+          // not on the canvas having a size: a <canvas> reports the HTML
+          // default 300x150 immediately, long before wasm has instantiated, so
+          // waiting on its size can pass before anything has actually booted.
+          const hasBooted = () => /Godot Engine v/.test(logs.join('\n'));
+          for (let i = 0; i < 45 && !hasBooted(); i++) {
+            await page.waitForTimeout(2000);
+          }
+
+          const canvas = await page.evaluate(() => {
+            const c = document.querySelector('canvas');
+            return c ? { w: c.width, h: c.height } : null;
+          });
+
+          const joined = logs.join('\n');
+          const checks = [
+            ['Godot engine started', /Godot Engine v/.test(joined), ''],
+            ['build is single-threaded', /single-threaded/.test(joined), ''],
+            ['WebGL context acquired', /OpenGL ES|WebGL/.test(joined), ''],
+            ['canvas present', !!canvas, canvas ? canvas.w + 'x' + canvas.h : 'no canvas'],
+            ['no console errors', errs.length === 0, errs.slice(0, 3).join(' | ')],
+          ];
+
+          let failed = 0;
+          for (const [label, ok, detail] of checks) {
+            console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${label}${detail ? '  ' + detail : ''}`);
+            if (!ok) failed++;
+          }
+          console.log('\n--- engine output ---');
+          logs.slice(0, 12).forEach(l => console.log('  ' + l));
+
+          await browser.close();
+          process.exit(failed === 0 ? 0 : 1);
+          JS
+
+          node boot-check.mjs
