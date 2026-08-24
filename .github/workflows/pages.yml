@@ -1,0 +1,61 @@
+name: Deploy Pages
+
+# Publishes the contents of the gh-pages branch as the Pages site.
+#
+# Why this exists, and why it is on main:
+#
+# The template's own deploy-main.yml publishes by PUSHING to gh-pages, which
+# only serves anything when the Pages source is "Deploy from a branch". This
+# repository's Pages source is "GitHub Actions", where a branch push is ignored
+# and a workflow has to do the deploying instead.
+#
+# It has to sit on the default branch: the github-pages environment's
+# deployment branch policy allows only the default branch, so the identical
+# workflow on gh-pages was rejected before a single step ran.
+#
+# It builds nothing. It takes whatever is already on gh-pages and ships it, so
+# it stays out of CI's way and does not duplicate the export.
+
+on:
+  push:
+    branches: [gh-pages]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Never let two deploys race for the same site.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Check out the built site
+        uses: actions/checkout@v4
+        with:
+          ref: gh-pages
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload the site
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: .
+
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+      - name: Where it went
+        run: echo "Live at ${{ steps.deployment.outputs.page_url }}" >> "$GITHUB_STEP_SUMMARY"
