@@ -47,8 +47,8 @@ of **every** Godot Web build; do not relax them.
 | **No 3D** | 2D only — `Control`, `Node2D`, sprites, tilemaps. |
 | **Bounded memory** | Browsers cap WebAssembly memory hard. See §4. |
 | **Fixed frame** | 720×1280 portrait, in `project.conf`. Off-shape screens get the same frame centred and letterboxed, never a responsive reflow — that is `stretch/aspect="keep"`. Portrait is load-bearing: the run climbs, so the frame has to show the tier being aimed at above the frog. |
-| **One button, and nothing else** | Tap, click, or space. Press and release both matter — press fires the jump, holding feeds in power — but it is still ONE button. No tilt, no drag, no swipe, no multi-touch, no keyboard requirement. Rolling is automatic and momentum-driven; there is no input that steers speed or direction, and adding one changes what the prototype is testing. |
-| **No tutorial, ever** | No hint text, no onboarding, no arrows, no "nice timing" feedback, no on-screen indication of where the jump window is. The prototype's entire question is whether the timing reads with nothing explained; anything that explains it answers the question for the player. The height readout is a score, not a hint, and is the only text a run shows. |
+| **One thumb, one drag** | Press, drag, release. That is the entire input surface: no buttons, no tilt, no multi-touch, no keyboard requirement. Rolling is still automatic and momentum-driven — the player never drives the ball, they kick it. |
+| **No tutorial, ever** | No hint text, no onboarding, no instructions, no "nice shot" feedback. The prototype's entire question is whether the timing reads with nothing explained; anything that explains it answers the question for the player. The height readout is a score, not a hint, and is the only text a run shows. |
 | **Monochrome** | Off-white ink on near-black. Line art, no rasters. The body is a bare circle with one arrow — the arrow is the only thing on screen carrying information, and anything else drawn on the body competes with it. |
 
 ---
@@ -208,65 +208,52 @@ because they define what the gates *mean*.
 
 ## 8. The game
 
-You are a ball that rolls like a wheel, climbing a narrow walled shaft. Rolling
-happens on its own — off landings, out of its own momentum — and you never
-steer it; run into the side of the shaft and it turns you around. The only
-thing you can do is press, and **where the ball is in its roll when you press
-is the whole game.** Picture a clock fixed to the world, not to the ball: 12 is
-up, 3 is the way you are going, 6 is the ground, 9 is behind you. The arrow
-rides round that clock as the body spins. Press with the arrow at 6 and you go
-straight up, keeping the speed you had — that is the climb jump. Press later,
-with the arrow swung toward 3, and you launch forward on an arc — around 4:30
-that is a 45° launch, which trades height for reach across the shaft. Press in
-the top half and you whiff. The point of the prototype is to find out whether a
-player with no instructions discovers that gradient within a few seconds of
-failing at it.
+You are a ball that rolls like a wheel. Rolling happens on its own; you never
+drive it. **You drag a thumb, and the ball gets kicked the opposite way.**
 
-**The run goes up, and only up.** Ledges are stacked in a column with walls
-down both sides. The score is height. Falling below the lowest live ledge ends
-the run, and there are no checkpoints.
+The arrow on the ball points wherever your thumb went — drag down and the arrow
+plants downward, shoving the ball up. Drag left, it goes right. Drag length is
+power: a short pull is a nudge, a long one is a launch. Direction and strength
+are independent, and both are visible on the arrow before you let go.
 
-**Three numbers are locked together, and getting any of them wrong breaks the
-game rather than making it feel bad:**
+**A kick works anywhere.** Grounded, mid-air, scraping a wall — nothing in the
+kick path asks about the ground. This is the whole point of the current design:
+players asked for control while in motion, and they have it.
 
-- `rise` must exceed the ball's **diameter**, not its radius. A ball taller
-  than the gap cannot fit between tiers — it jams under the ledge above, gets
-  squeezed sideways, and stops dead. This was a real bug, and it presents as
-  the ball freezing rather than as anything to do with size.
-- `base_jump_impulse` must give an apex well clear of `rise_max`, with real
-  headroom rather than a hair, or tiers are unreachable and the run dead-ends
-  for reasons the player cannot see.
-- `max_roll_speed` must be small enough that the drift during a flight is about
-  one `max_lateral_step`. Horizontal velocity carries through a jump, and the
-  player cannot steer, so a fast ball crosses the whole shaft mid-air and hits
-  the far wall instead of the tier it was aimed at.
+**Which means the difficulty lives entirely in two dials.** `kick_cooldown_sec`
+and `air_kicks_allowed` are the only things standing between this and a flight
+simulator. With a short cooldown and unlimited air kicks the ball simply flies
+and no level can threaten it. They ship permissive, matching the brief, and are
+the first thing to tighten once anyone plays it.
 
-**The arrow is the whole interface.** The body is a featureless circle with a
-single arrow along its underside. Where the arrow points is where the push will
-come from, so reading the arrow *is* reading the clock. On a press it shoots out
-past the rim and plants into the ground — the shove is visibly coming from the
-arrow rather than from nowhere — and it stays out for exactly as long as power
-is still feeding in, so its length is the commitment. Direction is the aim,
-extension is the effort; that is the entire visual language and nothing else on
-the body may compete with it.
+### Two level modes, both shipping
 
-**How long you hold is the second half of the input.** The press fires the jump
-immediately, at its weakest, in the direction the clock was showing at that
-instant. Keep holding and the rest of the power feeds in over `max_hold_sec`. A
-flick is a hop; a full press is a full jump. The clock decides *where*, the
-finger decides *how hard*, and the two are independent on purpose.
+`LevelTuning.mode` picks one, and both exist because they ask different things
+of the same kick:
 
-The jump has to fire on the PRESS, not the release. A jump that resolved on
-release would read the clock at a moment the frog had already spun past — at
-cruise the body turns roughly 70° during a full hold, which is most of the
-window. Resolving on release was tried and measured: it flattened the skill
-gradient to nothing, because a fully-charged jump could not be aimed.
+- **CLIMB** — up a walled shaft, score is height. Vertical aim under pressure,
+  in a column narrow enough that a bad sideways kick puts you into a wall.
+- **ROLL** — rightward over ramps and gaps, score is distance. Carrying speed,
+  and using the kick to rescue a landing you misjudged.
 
-**The backward half is deliberately not a mirror.** Tapping toward 9 o'clock
-only reverses a frog that was barely moving; a frog with speed just gets shoved
-near-vertical instead, because forward momentum blends against the backward
-angle and past `backward_dominance_speed` cancels it outright. This is meant to
-be hard to pull off on purpose, not a reverse button.
+Neither was deleted when the other was built. The playtest wants to compare.
+
+### The numbers that are locked together
+
+Getting one of these wrong breaks the game rather than making it feel bad:
+
+- In CLIMB, `rise` must exceed the ball's **diameter plus `ledge_thickness`**.
+  The gap the ball passes through is the rise minus the slab hanging under the
+  tier above. Too tight and the ball scrapes the ceiling, which presents as
+  kicks that barely leave the ground.
+- Ledge width is bounded from ABOVE. A ledge directly overhead is a ceiling, so
+  the shaft must keep a corridor at least a ball wide open beside every tier.
+  Widening ledges to make landing easier makes the climb *impossible* instead.
+- `max_roll_speed` must stay small relative to the shaft width, because
+  horizontal velocity carries through a launch.
+- `MAX_SEGMENTS` must exceed the tiers visible at once **plus** those generated
+  ahead, or the ring recycles the ledge the ball is standing on — which reads
+  as the ball freezing in mid-air rather than as a memory bug.
 
 ### Changing the feel
 
@@ -275,65 +262,18 @@ be hard to pull off on purpose, not a reverse button.
 hardcode a value into a script to try something — the whole point of this build
 is that the feel is iterable without touching code.
 
-The two dials that matter most, and are easiest to get wrong:
+Radius is still randomised per run (`randomize_radius`, `radius_min`,
+`radius_max`). It no longer gates whether the mechanic is usable, now that aim
+comes from the thumb rather than the body's spin, but it still decides how big
+a target the ball is and what gaps it fits through.
 
-- **Radius is randomised per run** (`randomize_radius`, `radius_min`,
-  `radius_max`), because it is the dial nobody can guess: it trades spin rate
-  against readability and only play settles it. Every run is a data point. Pin
-  it with `randomize_radius = false` once the range has told you where to sit.
-  Radius is not cosmetic — rolling without slipping ties spin to speed, so a
-  small frog spins fast; at radius 32 the frog turned three times a second and
-  the 4:30 sweet spot passed in under one physics frame, which made the
-  mechanic untappable. Shrinking the frog makes the game harder to *perceive*,
-  not harder to *play*.
-- **`max_hold_sec` must stay short.** The rest of the jump feeds in over that
-  window, and a low forward arc can land before a slow ramp finishes — which
-  silently eats the boost and flattens the gradient. 0.32 did exactly that;
-  0.15 does not.
-- **`start_phase_deg`** puts the frog on 4:30 standing still, so a player's
-  very first press — made before they know there is a window — is a good
-  forward launch rather than a coin flip.
-- **`drive_direction`** is a property of the run, not of the ball. It must not
-  follow the direction of travel: tying the self-drive to travel means one
-  mistimed opening press reverses the ball and then accelerates it backward for
-  ever — a dead run the player never chose and cannot recover from. The shaft
-  walls may turn the ball around; its own velocity may not.
+**After any tuning change, run the probe** (§5). It plays both modes under
+fixed aim policies — flailing in random directions, always kicking straight up,
+kicking only when falling, and kicking against whatever is going wrong. The
+question it answers is whether deliberate input beats flailing. If `random`
+catches the deliberate policies, the mechanic is not being tested no matter how
+good the run feels, and the cooldown and air budget are the levers.
 
-**After any tuning change, run the probe** (§5). The current numbers, and they
-are not a success:
-
-```
-policy   | median m | note
----------|----------|------------------------------------------------
-never    |      1.3 | baseline: no input at all. NB this is purely the
-         |          | ball's own radius above spawn — it is zero climb
-random   |      8.1 | mashing
-neutral  |      8.1 | pressing at 6 o'clock — straight up
-boost    |      1.3 | pressing near 4:30 — dies before climbing at all
-late     |      1.3 | pressing at the 3 o'clock edge — dies likewise
-```
-
-**Read that honestly: mashing scores exactly as well as deliberate timing.**
-The climb works, and pressing beats not-pressing by six times, but `random`
-matching `neutral` means the prototype's actual question — does timing read as
-skill? — currently answers *no* on the vertical variant.
-
-Two things cause it, and both are consequences of the axis change rather than
-bugs:
-
-- **The forward half of the window is a liability in a shaft, not a reward.**
-  A 4:30 launch trades height for sideways reach, which in a narrow column
-  throws the ball into a wall and off the tier. In the horizontal roller the
-  forward boost was the whole skill gradient; here it is how you die.
-- **A 180° window is too generous to require timing.** Half of all rotations
-  are a valid press and anything near 6 o'clock climbs, so mashing finds it by
-  accident. Narrowing `window_arc_deg` is the obvious lever — the brief always
-  treated the arc as a value to dial in through play, not a fixed rule.
-
-Do not "fix" this by making the level easier. If a change makes `random` and
-`neutral` diverge, it is working; if they stay level, the mechanic is not being
-tested no matter how good the run feels.
-
-Watch also for every policy collapsing to roughly `never`: that is not
-difficulty, it means the ball is being stopped by geometry — see the three
-coupled numbers above.
+Watch also for every policy collapsing together at a low number: that is not
+difficulty, it means the ball is being stopped by geometry — see the coupled
+numbers above.

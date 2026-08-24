@@ -1,7 +1,7 @@
 class_name LevelTuning
 extends Resource
 
-## Shape of the climbing shaft.
+## Shape of the level, in either mode.
 ##
 ## The run goes UP. Ledges are stacked in a narrow column with walls down both
 ## sides, and the only way to the next tier is a well-timed jump — a ledge you
@@ -10,6 +10,19 @@ extends Resource
 ## The vertical gap between tiers is the dial that decides whether the game is
 ## possible at all: it has to sit under the height a full press can clear, or
 ## the run dead-ends at the first ledge the frog cannot reach.
+
+## Which kind of level to build.
+##
+## Both exist because they ask different things of the kick. CLIMB is about
+## height and vertical aim in a confined column; ROLL is about carrying speed
+## across gaps. The playtest wants both, so neither was deleted when the other
+## was built.
+enum Mode {
+	CLIMB,  ## Up a walled shaft. Score is height.
+	ROLL,   ## Rightward across gaps and ramps. Score is distance.
+}
+
+@export var mode: Mode = Mode.CLIMB
 
 ## 0 means "pick a fresh seed per run".
 @export var seed_value: int = 0
@@ -83,3 +96,41 @@ extends Resource
 ## rather than near it. Alternating is what makes the climb a zig-zag instead of
 ## a straight ladder.
 @export_range(0.0, 1.0, 0.05) var alternate_chance: float = 0.85
+
+# --- ROLL mode -------------------------------------------------------------
+# Only read when mode is ROLL. The ball runs rightward over flats, ramps and
+# gaps; the kick is what clears the gaps and rescues a bad landing.
+
+## Flat, safe runway ahead of the spawn point, px.
+@export_range(200.0, 4000.0, 10.0, "or_greater") var roll_start_runway: float = 900.0
+
+## Keep terrain built this far ahead of the ball, px.
+@export_range(500.0, 10000.0, 50.0, "or_greater") var roll_generate_ahead: float = 2200.0
+
+## How far the surface may wander above or below the spawn height, px.
+@export_range(100.0, 4000.0, 10.0, "or_greater") var roll_drift_limit: float = 900.0
+
+## Length of a flat or ramped span, px.
+@export_range(50.0, 3000.0, 10.0, "or_greater") var roll_span_min: float = 300.0
+@export_range(50.0, 3000.0, 10.0, "or_greater") var roll_span_max: float = 640.0
+
+## Slope of a ramp, degrees. Positive is downhill, and the sign is chosen per
+## span to keep the surface inside the drift limit.
+@export_range(0.0, 50.0, 0.5, "or_greater") var roll_slope_max: float = 24.0
+
+## Chance a span is a ramp rather than a flat.
+@export_range(0.0, 1.0, 0.05) var roll_ramp_chance: float = 0.45
+
+## Gap width that must be cleared, px. Bounded above by what a kick can carry
+## the ball across from a standing roll — a gap wider than that is a dead end.
+@export_range(50.0, 2000.0, 10.0, "or_greater") var roll_gap_min: float = 180.0
+@export_range(50.0, 2000.0, 10.0, "or_greater") var roll_gap_max: float = 420.0
+
+## Chance a span is preceded by a gap.
+@export_range(0.0, 1.0, 0.05) var roll_gap_chance: float = 0.55
+
+## Height change across a gap, px.
+@export_range(0.0, 600.0, 5.0, "or_greater") var roll_step_max: float = 150.0
+
+## How far below the surface the run ends, px.
+@export_range(100.0, 4000.0, 10.0, "or_greater") var roll_fall_tolerance: float = 800.0

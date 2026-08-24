@@ -1,17 +1,18 @@
 # Frog Ball
 
-A ball that rolls like a wheel, climbing a shaft, and one button.
+A ball that rolls like a wheel, and one thumb.
 
-Press to jump. **Where the ball is in its roll when you press decides what the
-jump does** — arrow at the bottom sends you straight up, arrow swung forward
-throws you across the shaft on a flatter arc, arrow up top and you whiff.
-**How long you hold decides how hard** — a flick is a hop, a full press is a
-full jump. Land on a ledge, roll, time the next press, climb the next tier.
-Run into the side of the shaft and it turns you around. The score is height.
+**Drag, and the ball gets kicked the opposite way.** Drag down and the arrow
+plants downward, shoving the ball up; drag left and it goes right. How far you
+drag is how hard it kicks. It works anywhere — on the ground, in mid-air, off a
+wall — so you are always in control of where it goes next.
+
+Two courses ship: **CLIMB** up a walled shaft scored on height, and **ROLL**
+rightward over ramps and gaps scored on distance.
 
 Nothing in the game explains any of that, and that is the point. This is a
-prototype built to answer one question: **does the roll-timing jump read as
-skill to someone who was told nothing?**
+prototype built to answer one question: **is the kick satisfying to aim, and
+does using it well beat flailing at it?**
 
 Built from
 [godot-web-template](https://github.com/Great-Grand-Software/godot-web-template).
@@ -47,7 +48,7 @@ The import step is not optional on a clone that has never been opened: GUT's
 test run aborts with "Some GUT class_names have not been imported" instead of
 failing a test.
 
-The suite must report **62 tests passing across 7 scripts**. Do this even when
+The suite must report **51 tests passing across 6 scripts**. Do this even when
 your task looks trivial — a failure you see *after* editing is ambiguous unless
 you know the baseline was clean.
 
@@ -94,10 +95,10 @@ first run, and a cancelled run reports no failures *and* no successes.
 
 ## Playing it
 
-- **Tap / click / space** — jump. That is the entire input. Press fires it;
-  keep holding for more power.
+- **Press, drag, release** — kick. That is the entire input. Direction aims,
+  distance powers, and the ball goes opposite the drag.
 - Falling below the terrain ends the run; it restarts on its own after a beat.
-- The only score is height climbed.
+- The only score is height climbed, or distance covered, depending on the mode.
 
 ## Working on the feel
 

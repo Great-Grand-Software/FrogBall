@@ -4,6 +4,7 @@
 
 [resource]
 script = ExtResource("1_script")
+mode = 0
 seed_value = 0
 shaft_width = 660.0
 wall_thickness = 60.0
@@ -17,3 +18,15 @@ ledge_min_width = 220.0
 ledge_max_width = 330.0
 max_lateral_step = 0.42
 alternate_chance = 0.85
+roll_start_runway = 900.0
+roll_generate_ahead = 2200.0
+roll_drift_limit = 900.0
+roll_span_min = 300.0
+roll_span_max = 640.0
+roll_slope_max = 24.0
+roll_ramp_chance = 0.45
+roll_gap_min = 180.0
+roll_gap_max = 420.0
+roll_gap_chance = 0.55
+roll_step_max = 150.0
+roll_fall_tolerance = 800.0

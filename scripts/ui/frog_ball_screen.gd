@@ -19,6 +19,11 @@ const TERRAIN_POLYGONS: int = TerrainPlan.MAX_SEGMENTS
 ## Points in a ledge quad. Named so the buffer size is not a loose 4.
 const QUAD_POINTS: int = 4
 
+## How far either side of the ball a roll course looks for ground when placing
+## the kill plane, px. CLIMB does not need it — everything below the lowest live
+## ledge has already been recycled.
+const KILL_SCAN_HALF_WIDTH: float = 900.0
+
 ## Debug overlay refresh period, seconds. Slower than a frame on purpose: the
 ## overlay builds a string, and nothing running every frame should allocate.
 const DEBUG_REFRESH_SEC: float = 0.1
@@ -63,15 +68,19 @@ const DEBUG_REFRESH_SEC: float = 0.1
 @export var debug_overlay: bool = false
 
 var _plan: TerrainPlan
+var _plan_tuning: LevelTuning
 var _quad: PackedVector2Array = PackedVector2Array()
 var _polygons: Array[CollisionPolygon2D] = []
 var _run_active: bool = false
 var _synced_frontier: float = INF
 var _shown_metres: int = -1
 var _run_metres: int = 0
-var _highest_y: float = 0.0
+var _best_axis: float = 0.0
+var _synced_frontier_x: float = INF
 var _stuck_for: float = 0.0
 var _debug_elapsed: float = 0.0
+var _aim_active: bool = false
+var _aim_origin: Vector2 = Vector2.ZERO
 
 @onready var _frog: FrogBody = %Frog
 @onready var _terrain: StaticBody2D = %Terrain
@@ -92,12 +101,16 @@ func _ready() -> void:
 	_frog.tuning = frog_tuning
 	_quad.resize(QUAD_POINTS)
 	_plan = TerrainPlan.new(level_tuning, Vector2.ZERO)
+	_plan_tuning = level_tuning
 	_build_polygon_pool()
 	_build_walls()
+	var walled: bool = level_tuning.mode == LevelTuning.Mode.CLIMB
+	_left_wall.disabled = not walled
+	_right_wall.disabled = not walled
 
 	_camera.zoom = Vector2(camera_zoom, camera_zoom)
 	_debug_label.visible = debug_overlay
-	_frog.jumped.connect(_on_frog_jumped)
+	_frog.kicked.connect(_on_frog_kicked)
 
 	GameState.best_distance_changed.connect(_on_game_state_best_distance_changed)
 	start_run()
@@ -133,13 +146,20 @@ func refresh_terrain() -> void:
 		polygon.polygon = _quad
 		polygon.disabled = false
 	_synced_frontier = _plan.frontier_y()
+	_synced_frontier_x = _plan.frontier_x()
 	queue_redraw()
 
 
 ## Starts a fresh run: new shaft, frog back on the floor, height back to zero.
 func start_run() -> void:
+	# Rebuilt when the tuning instance has been swapped — the plan captures its
+	# tuning, so changing mode on the screen alone would silently do nothing.
+	if _plan == null or _plan_tuning != level_tuning:
+		_plan = TerrainPlan.new(level_tuning, Vector2.ZERO)
+		_plan_tuning = level_tuning
 	_plan.reset(run_seed if run_seed != 0 else level_tuning.seed_value)
-	_plan.advance_above(_plan.start_point().y - level_tuning.generate_above)
+	_plan.advance_for(_plan.start_point())
+	_plan.advance_for(_plan.start_point())
 	refresh_terrain()
 
 	var spawn: Vector2 = _plan.start_point()
@@ -151,7 +171,7 @@ func start_run() -> void:
 	_frog.reset_to(spawn)
 	_camera.global_position = Vector2(spawn.x, spawn.y - camera_look_ahead)
 
-	_highest_y = spawn.y
+	_best_axis = spawn.y if _plan.climbing() else spawn.x
 	_run_metres = 0
 	_stuck_for = 0.0
 	_run_active = true
@@ -175,6 +195,8 @@ func _draw() -> void:
 		draw_line(left, right, ink, 4.0)
 
 	# The walls, drawn across whatever slice of the shaft is near the frog.
+	if not _plan.climbing():
+		return
 	var span: float = level_tuning.wall_span * 0.5
 	var centre_y: float = _frog.global_position.y
 	for edge: float in [_plan.shaft_left(), _plan.shaft_right()]:
@@ -188,12 +210,14 @@ func _physics_process(delta: float) -> void:
 		return
 
 	var here: Vector2 = _frog.global_position
-	_plan.advance_above(here.y - level_tuning.generate_above)
-	if not is_equal_approx(_plan.frontier_y(), _synced_frontier):
+	_plan.advance_for(here)
+	if not is_equal_approx(_plan.frontier_y(), _synced_frontier) \
+			or not is_equal_approx(_plan.frontier_x(), _synced_frontier_x):
 		refresh_terrain()
-	_track_walls(here)
+	if _plan.climbing():
+		_track_walls(here)
 
-	if here.y > _plan.lowest_surface_y() + fall_tolerance:
+	if here.y > _fall_floor(here) + _fall_limit():
 		_end_run()
 		return
 
@@ -205,9 +229,31 @@ func _physics_process(delta: float) -> void:
 	else:
 		_stuck_for = 0.0
 
-	_highest_y = minf(_highest_y, here.y)
-	var climbed: float = _plan.start_point().y - _highest_y
-	_run_metres = maxi(_run_metres, int(maxf(climbed, 0.0) / maxf(pixels_per_metre, 1.0)))
+	_advance_score(here)
+
+
+## Where the ground under the ball currently is, for the kill plane to trail.
+func _fall_floor(here: Vector2) -> float:
+	if _plan.climbing():
+		return _plan.lowest_surface_y()
+	return _plan.lowest_surface_near(here.x, KILL_SCAN_HALF_WIDTH)
+
+
+func _fall_limit() -> float:
+	return fall_tolerance if _plan.climbing() else level_tuning.roll_fall_tolerance
+
+
+## Height climbed, or distance covered, depending on the mode. Either way it
+## only ever goes up: a run is scored on its best, not its current position.
+func _advance_score(here: Vector2) -> void:
+	var travelled: float = 0.0
+	if _plan.climbing():
+		_best_axis = minf(_best_axis, here.y)
+		travelled = _plan.start_point().y - _best_axis
+	else:
+		_best_axis = maxf(_best_axis, here.x)
+		travelled = _best_axis - _plan.start_point().x
+	_run_metres = maxi(_run_metres, int(maxf(travelled, 0.0) / maxf(pixels_per_metre, 1.0)))
 	_refresh_height(_run_metres)
 
 
@@ -221,35 +267,50 @@ func _process(delta: float) -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
-	# One button is the entire input surface: a single touch, a single left
-	# click, or space, which is a desktop convenience and never required.
+	# One thumb, dragged. Press starts an aim, motion aims it, release kicks.
 	#
-	# Press and release are BOTH meaningful. Pressing fires the jump at the
-	# angle the clock is showing right now; holding feeds in the rest of the
-	# power. A flick is a hop, a full press is a launch.
-	var pressed: bool = false
-	var is_tap: bool = false
+	# Drag is measured in VIEWPORT pixels from where the press began, not in
+	# world space: how far a thumb travelled should mean the same thing whatever
+	# the camera is doing.
 	if event is InputEventScreenTouch:
 		var touch := event as InputEventScreenTouch
-		is_tap = touch.index == 0
-		pressed = touch.pressed
+		if touch.index != 0:
+			return
+		get_viewport().set_input_as_handled()
+		_aim_event(touch.pressed, touch.position)
+	elif event is InputEventScreenDrag:
+		var drag := event as InputEventScreenDrag
+		if drag.index != 0:
+			return
+		get_viewport().set_input_as_handled()
+		_aim_moved(drag.position)
 	elif event is InputEventMouseButton:
 		var mouse := event as InputEventMouseButton
-		is_tap = mouse.button_index == MOUSE_BUTTON_LEFT
-		pressed = mouse.pressed
-	elif event is InputEventKey:
-		var key := event as InputEventKey
-		is_tap = key.keycode == KEY_SPACE and not key.echo
-		pressed = key.pressed
-	if not is_tap:
-		return
-	get_viewport().set_input_as_handled()
+		if mouse.button_index != MOUSE_BUTTON_LEFT:
+			return
+		get_viewport().set_input_as_handled()
+		_aim_event(mouse.pressed, mouse.position)
+	elif event is InputEventMouseMotion and _aim_active:
+		_aim_moved((event as InputEventMouseMotion).position)
+
+
+func _aim_event(pressed: bool, position: Vector2) -> void:
 	if not _run_active:
 		return
 	if pressed:
-		_frog.begin_tap()
-	else:
-		_frog.release_tap()
+		_aim_active = true
+		_aim_origin = position
+		_frog.begin_aim()
+	elif _aim_active:
+		_aim_active = false
+		_frog.update_aim(position - _aim_origin)
+		_frog.release_aim()
+
+
+func _aim_moved(position: Vector2) -> void:
+	if not _aim_active or not _run_active:
+		return
+	_frog.update_aim(position - _aim_origin)
 
 
 func _build_polygon_pool() -> void:
@@ -280,13 +341,16 @@ func _track_walls(here: Vector2) -> void:
 
 
 func _track_camera(delta: float) -> void:
-	# Horizontally pinned to the shaft: the column is narrow enough to see
-	# whole, and a camera that slid side to side would make a vertical jump
-	# read as a diagonal one.
-	var target_y: float = _frog.global_position.y - camera_look_ahead
 	var here: Vector2 = _camera.global_position
-	here.x = _plan.start_point().x
-	here.y = lerpf(here.y, target_y, 1.0 - exp(-camera_follow_speed * delta))
+	var weight: float = 1.0 - exp(-camera_follow_speed * delta)
+	if _plan.climbing():
+		# Pinned horizontally: the column is narrow enough to see whole, and a
+		# camera sliding sideways would make a vertical kick read as a diagonal.
+		here.x = _plan.start_point().x
+		here.y = lerpf(here.y, _frog.global_position.y - camera_look_ahead, weight)
+	else:
+		here.x = lerpf(here.x, _frog.global_position.x + camera_look_ahead, weight)
+		here.y = lerpf(here.y, _frog.global_position.y, weight * 0.6)
 	_camera.global_position = here
 
 
@@ -302,11 +366,12 @@ func _refresh_height(metres: int) -> void:
 func _refresh_debug() -> void:
 	# Radius is in here because it is randomised per run: when a run feels good
 	# or awful, the first thing you want to know is which frog you were riding.
-	_debug_label.text = "r %.0f   feet %+.0f deg   charge %.0f%%   %s" % [
+	_debug_label.text = "r %.0f   aim %.0f%%   air kicks %d   %s%s" % [
 		_frog.radius(),
-		_frog.feet_phase_deg(),
-		_frog.charge() * 100.0,
+		_frog.aim_power() * 100.0,
+		_frog.air_kicks_used(),
 		"ground" if _frog.grounded else "air",
+		"" if _frog.can_kick() else "  (cooling)",
 	]
 
 
@@ -325,14 +390,13 @@ func _end_run() -> void:
 	tween.tween_property(_fade, "color:a", 0.0, half)
 
 
-func _on_frog_jumped(outcome: JumpOutcome) -> void:
-	# Nothing on screen reacts to a jump on purpose — no flash, no readout, no
-	# "nice timing". The arc itself is the only feedback, which is the thing
-	# being tested. This hook exists for the debug overlay.
+func _on_frog_kicked(outcome: KickOutcome) -> void:
+	# Nothing on screen reacts to a kick on purpose. The arc itself is the only
+	# feedback. This hook exists for the debug overlay.
 	if debug_overlay:
 		_debug_elapsed = DEBUG_REFRESH_SEC
 		if not outcome.fired:
-			_debug_label.text = "whiffed at %+.0f deg" % outcome.phase_deg
+			_debug_label.text = "drag too short"
 
 
 func _on_game_state_best_distance_changed(_metres: int) -> void:

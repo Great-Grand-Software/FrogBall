@@ -114,17 +114,6 @@ func test_the_frog_settles_onto_the_terrain_rather_than_falling_through() -> voi
 	assert_true(frog.grounded, "the opening runway holds the frog up")
 
 
-func test_a_tap_gets_the_frog_off_the_ground() -> void:
-	_screen.run_seed = A_PINNED_SEED
-	_screen.start_run()
-	var frog: FrogBody = _screen.get_node("%Frog")
-	await wait_physics_frames(30)
-	var resting_y: float = frog.global_position.y
-	frog.queue_tap()
-	await wait_physics_frames(12)
-	assert_lt(frog.global_position.y, resting_y - 40.0, "the tap launched it upward")
-
-
 func test_a_run_survives_its_opening_seconds() -> void:
 	# Not a fun test, a fairness one: whatever the generator rolls, the player
 	# should not be dead before they have worked out what the tap does.
@@ -151,18 +140,6 @@ func test_a_frog_knocked_backward_rolls_itself_back() -> void:
 
 
 # --- the new dials ---------------------------------------------------------
-
-
-func test_a_run_starts_the_frog_on_the_briefed_clock_angle() -> void:
-	# Standing on 4:30 means the player's very first tap — made before they know
-	# there is a window at all — is a good forward launch, not a coin flip.
-	_screen.run_seed = A_PINNED_SEED
-	_screen.start_run()
-	var frog: FrogBody = _screen.get_node("%Frog")
-	await wait_physics_frames(2)
-	assert_almost_eq(
-		frog.feet_phase_deg(), _screen.frog_tuning.start_phase_deg, 6.0, "starts near 4:30"
-	)
 
 
 func test_each_run_rolls_a_different_radius() -> void:
@@ -197,50 +174,80 @@ func test_the_frog_is_placed_on_the_surface_whatever_size_it_rolled() -> void:
 	)
 
 
-func test_holding_longer_jumps_higher() -> void:
-	# The apex has to be tracked across the WHOLE flight, released mid-way: a
-	# long hold has already peaked by the time the button comes up, so measuring
-	# only after release reports the descent.
-	var apexes: Array[float] = []
-	for hold: int in [1, 24]:
-		_screen.run_seed = A_PINNED_SEED
-		_screen.start_run()
-		var frog: FrogBody = _screen.get_node("%Frog")
-		await wait_physics_frames(20)
-		var resting: float = frog.global_position.y
-		var highest: float = 0.0
-		frog.begin_tap()
-		for step: int in range(70):
-			if step == hold:
-				frog.release_tap()
-			await wait_physics_frames(1)
-			highest = maxf(highest, resting - frog.global_position.y)
-		apexes.append(highest)
-	assert_gt(apexes[1], apexes[0] * 1.4, "a full press clears far more than a flick")
+
+# --- kicks ------------------------------------------------------------------
 
 
-func test_a_press_fires_the_jump_immediately() -> void:
-	# The press is the input. A jump that waited for release would fire at an
-	# angle the frog had already spun past, which is unaimable — the whole game
-	# is timing a rotation you can see.
+func test_a_drag_gets_the_ball_off_the_ground() -> void:
 	_screen.run_seed = A_PINNED_SEED
 	_screen.start_run()
 	var frog: FrogBody = _screen.get_node("%Frog")
 	await wait_physics_frames(20)
 	var resting: float = frog.global_position.y
-	frog.begin_tap()
-	await wait_physics_frames(4)
-	assert_lt(frog.global_position.y, resting - 10.0, "already airborne, no charge-up wait")
+	frog.kick(Vector2.DOWN * _screen.frog_tuning.max_drag_px)
+	await wait_physics_frames(10)
+	assert_lt(frog.global_position.y, resting - 40.0, "dragging down launched it upward")
 
 
-func test_releasing_early_cuts_the_jump_short() -> void:
-	# Same angle, same everything, only the length of the press differs.
+func test_a_kick_works_in_mid_air() -> void:
+	# The whole point of the change: control while airborne, not only off a
+	# surface. If this fails the feature does not exist.
 	_screen.run_seed = A_PINNED_SEED
 	_screen.start_run()
 	var frog: FrogBody = _screen.get_node("%Frog")
 	await wait_physics_frames(20)
-	frog.begin_tap()
+	frog.kick(Vector2.DOWN * _screen.frog_tuning.max_drag_px)
+	await wait_physics_frames(8)
+	assert_false(frog.grounded, "airborne for the second kick")
+	var before: float = frog.linear_velocity.y
+	await wait_physics_frames(10)
+	frog.kick(Vector2.DOWN * _screen.frog_tuning.max_drag_px)
 	await wait_physics_frames(2)
-	frog.release_tap()
-	var cut: float = absf(frog.linear_velocity.y)
-	assert_lt(cut, 0.0 + _screen.frog_tuning.base_jump_impulse, "a flick is not a full jump")
+	assert_lt(frog.linear_velocity.y, before, "the mid-air kick pushed it up again")
+
+
+func test_the_cooldown_refuses_a_second_kick_immediately() -> void:
+	# The cooldown is the entire difficulty budget. Without it the ball flies.
+	_screen.run_seed = A_PINNED_SEED
+	_screen.start_run()
+	var frog: FrogBody = _screen.get_node("%Frog")
+	await wait_physics_frames(20)
+	frog.kick(Vector2.DOWN * _screen.frog_tuning.max_drag_px)
+	await wait_physics_frames(2)
+	assert_false(frog.can_kick(), "still cooling down")
+	var held: float = frog.linear_velocity.y
+	frog.kick(Vector2.DOWN * _screen.frog_tuning.max_drag_px)
+	await wait_physics_frames(1)
+	assert_gt(frog.linear_velocity.y, held - 10.0, "the refused kick added nothing")
+
+
+func test_the_air_kick_budget_resets_on_landing() -> void:
+	_screen.run_seed = A_PINNED_SEED
+	_screen.frog_tuning.air_kicks_allowed = 1
+	_screen.start_run()
+	var frog: FrogBody = _screen.get_node("%Frog")
+	await wait_physics_frames(20)
+	frog.kick(Vector2.DOWN * _screen.frog_tuning.max_drag_px)
+	await wait_physics_frames(30)
+	frog.kick(Vector2.DOWN * _screen.frog_tuning.max_drag_px)
+	await wait_physics_frames(2)
+	assert_eq(frog.air_kicks_used(), 1, "one air kick spent")
+	# Fall back down and land.
+	for _step: int in range(180):
+		await wait_physics_frames(1)
+		if frog.grounded:
+			break
+	assert_true(frog.grounded, "back on a surface")
+	assert_eq(frog.air_kicks_used(), 0, "budget restored by landing")
+
+
+func test_a_roll_course_generates_and_is_survivable() -> void:
+	# Both modes ship, so both have to actually build a course.
+	_screen.level_tuning = _screen.level_tuning.duplicate()
+	_screen.level_tuning.mode = LevelTuning.Mode.ROLL
+	_screen.run_seed = A_PINNED_SEED
+	_screen.start_run()
+	assert_false(_screen.terrain_plan().climbing(), "plan is in roll mode")
+	assert_gt(_screen.terrain_plan().segment_count(), 1, "it built more than a runway")
+	await wait_physics_frames(90)
+	assert_true(_screen.is_running(), "alive a second and a half in")

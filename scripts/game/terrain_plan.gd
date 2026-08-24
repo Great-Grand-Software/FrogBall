@@ -1,15 +1,20 @@
 class_name TerrainPlan
 extends RefCounted
 
-## The climbing shaft, as data. No nodes, so it unit-tests without a scene.
+## The level, as data. No nodes, so it unit-tests without a scene.
 ##
-## A run goes upward through a stack of horizontal ledges inside a walled
-## column. Each ledge is a span; the emptiness between them is what forces a
-## jump. Ledges are placed so the next one is always within reach both
-## vertically and sideways — a generator that can emit an unreachable tier
-## produces runs that end for reasons the player cannot see or avoid.
+## Builds either kind of course, because the playtest wants both:
 ##
-## Ledges live in a fixed-size ring buffer. That is the guardrail from CLAUDE.md
+##  - CLIMB stacks ledges upward inside a walled column. The gap between tiers
+##    is what forces a kick, and the walls keep the ball in frame.
+##  - ROLL marches rightward over flats, ramps and gaps. The gaps force the
+##    kick instead.
+##
+## Both share one representation — a span from one point to another — so the
+## screen draws, collides and recycles them identically and neither mode gets
+## its own copy of the pooling logic.
+##
+## Spans live in a fixed-size ring buffer. That is the guardrail from CLAUDE.md
 ## section 4 made structural rather than remembered: an endless climb cannot
 ## leak ledges when the oldest is overwritten by construction, and the node pool
 ## that renders them is sized from the same constant.
@@ -24,16 +29,21 @@ extends RefCounted
 ## generate_above adds about seven more.
 const MAX_SEGMENTS: int = 26
 
-## Cap on ledges generated per advance_above() call, so the loop provably ends
-## even if a caller asks for an absurd target.
+## Cap on spans generated per advance call, so the loop provably ends even if a
+## caller asks for an absurd target.
 const MAX_SPANS_PER_ADVANCE: int = MAX_SEGMENTS
+
+## Beyond this fraction of the drift limit, a roll course is steered back toward
+## the spawn height.
+const DRIFT_CORRECTION_THRESHOLD: float = 0.6
 
 var _tuning: LevelTuning
 var _rng: RandomNumberGenerator = RandomNumberGenerator.new()
 var _origin: Vector2 = Vector2.ZERO
 var _x0: PackedFloat32Array = PackedFloat32Array()
 var _x1: PackedFloat32Array = PackedFloat32Array()
-var _y: PackedFloat32Array = PackedFloat32Array()
+var _y0: PackedFloat32Array = PackedFloat32Array()
+var _y1: PackedFloat32Array = PackedFloat32Array()
 var _written: int = 0
 
 
@@ -42,7 +52,8 @@ func _init(tuning: LevelTuning, origin: Vector2 = Vector2.ZERO) -> void:
 	_origin = origin
 	_x0.resize(MAX_SEGMENTS)
 	_x1.resize(MAX_SEGMENTS)
-	_y.resize(MAX_SEGMENTS)
+	_y0.resize(MAX_SEGMENTS)
+	_y1.resize(MAX_SEGMENTS)
 	reset(0)
 
 
@@ -54,8 +65,12 @@ func reset(seed_value: int) -> void:
 	else:
 		_rng.seed = seed_value
 	_written = 0
-	# The floor: a solid slab across the shaft, so a run opens with a roll the
-	# player can feel rather than a jump they have not learned yet.
+	if _tuning.mode == LevelTuning.Mode.ROLL:
+		# A flat runway: the first thing a player meets should be a roll they
+		# can feel, not a hole they fall down before learning the kick.
+		_push(_origin.x, _origin.x + maxf(_tuning.roll_start_runway, 1.0), _origin.y)
+		return
+	# The floor: a solid slab across the shaft, same reasoning.
 	var half: float = _tuning.shaft_width * 0.5
 	var floor_half: float = half * clampf(_tuning.floor_width_ratio, 0.05, 1.0)
 	_push(_origin.x - floor_half, _origin.x + floor_half, _origin.y)
@@ -82,27 +97,70 @@ func segment_count() -> int:
 ## Left-hand end of ledge [param index], 0 being the lowest still live.
 func segment_start(index: int) -> Vector2:
 	var slot: int = _slot(index)
-	return Vector2(_x0[slot], _y[slot]) if slot >= 0 else Vector2.ZERO
+	return Vector2(_x0[slot], _y0[slot]) if slot >= 0 else Vector2.ZERO
 
 
 ## Right-hand end of ledge [param index].
 func segment_end(index: int) -> Vector2:
 	var slot: int = _slot(index)
-	return Vector2(_x1[slot], _y[slot]) if slot >= 0 else Vector2.ZERO
+	return Vector2(_x1[slot], _y1[slot]) if slot >= 0 else Vector2.ZERO
 
 
 ## Height of the highest ledge built so far. Smaller y is higher up.
 func frontier_y() -> float:
-	return _y[_slot(segment_count() - 1)] if _written > 0 else _origin.y
+	return _y1[_slot(segment_count() - 1)] if _written > 0 else _origin.y
+
+
+## True when this plan is building a vertical shaft rather than a roll course.
+func climbing() -> bool:
+	return _tuning.mode == LevelTuning.Mode.CLIMB
 
 
 ## Builds upward until the shaft reaches [param target_y]. Bounded by
-## MAX_SPANS_PER_ADVANCE, so it always terminates.
+## MAX_SPANS_PER_ADVANCE, so it always terminates. CLIMB only.
 func advance_above(target_y: float) -> void:
 	var spans: int = 0
 	while frontier_y() > target_y and spans < MAX_SPANS_PER_ADVANCE:
 		_generate_one()
 		spans += 1
+
+
+## Builds rightward until the course reaches [param target_x]. Bounded the same
+## way. ROLL only.
+func advance_beyond(target_x: float) -> void:
+	var spans: int = 0
+	while frontier_x() < target_x and spans < MAX_SPANS_PER_ADVANCE:
+		_generate_roll_span()
+		spans += 1
+
+
+## Right-hand edge of the course built so far. ROLL only.
+func frontier_x() -> float:
+	return _x1[_slot(segment_count() - 1)] if _written > 0 else _origin.x
+
+
+## Advances whichever axis this mode runs along, keeping [param here] covered.
+func advance_for(here: Vector2) -> void:
+	if climbing():
+		advance_above(here.y - _tuning.generate_above)
+	else:
+		advance_beyond(here.x + _tuning.roll_generate_ahead)
+
+
+## Lowest surface anywhere near [param x], used to trail the kill plane under a
+## roll course instead of pinning it to a fixed height. ROLL only.
+func lowest_surface_near(x: float, half_width: float) -> float:
+	var lowest: float = -INF
+	var anywhere: float = -INF
+	for index: int in range(segment_count()):
+		var a: Vector2 = segment_start(index)
+		var b: Vector2 = segment_end(index)
+		anywhere = maxf(anywhere, maxf(a.y, b.y))
+		if b.x >= x - half_width and a.x <= x + half_width:
+			lowest = maxf(lowest, maxf(a.y, b.y))
+	if lowest > -INF:
+		return lowest
+	return anywhere if anywhere > -INF else _origin.y
 
 
 ## Lowest live ledge (largest y). The run ends when the frog falls well below
@@ -144,6 +202,39 @@ func _generate_one() -> void:
 	_push(centre - width * 0.5, centre + width * 0.5, next_y)
 
 
+## One span of roll course: an optional gap, then a flat or a ramp.
+func _generate_roll_span() -> void:
+	var gap: float = 0.0
+	var step: float = 0.0
+	if _rng.randf() < _tuning.roll_gap_chance:
+		gap = _rng.randf_range(_tuning.roll_gap_min, _tuning.roll_gap_max)
+		step = _rng.randf_range(-_tuning.roll_step_max, _tuning.roll_step_max)
+
+	var length: float = _rng.randf_range(_tuning.roll_span_min, _tuning.roll_span_max)
+	var drop: float = 0.0
+	if _rng.randf() < _tuning.roll_ramp_chance:
+		drop = length * tan(deg_to_rad(_rng.randf_range(0.0, _tuning.roll_slope_max)))
+		drop *= _drift_sign()
+
+	var limit: float = maxf(_tuning.roll_drift_limit, 1.0)
+	var start_x: float = frontier_x() + gap
+	var start_y: float = clampf(frontier_y() + step, _origin.y - limit, _origin.y + limit)
+	var end_y: float = clampf(start_y + drop, _origin.y - limit, _origin.y + limit)
+	_push(start_x, start_x + length, start_y, end_y)
+
+
+## +1 to slope downward, -1 upward, biased back toward the spawn height once the
+## surface has wandered too far. Keeps an endless run from drifting off screen.
+func _drift_sign() -> float:
+	var limit: float = maxf(_tuning.roll_drift_limit, 1.0)
+	var drift: float = frontier_y() - _origin.y
+	if drift > limit * DRIFT_CORRECTION_THRESHOLD:
+		return -1.0
+	if drift < -limit * DRIFT_CORRECTION_THRESHOLD:
+		return 1.0
+	return 1.0 if _rng.randf() < 0.5 else -1.0
+
+
 func _next_rise() -> float:
 	return _rng.randf_range(
 		minf(_tuning.rise_min, _tuning.rise_max), maxf(_tuning.rise_min, _tuning.rise_max)
@@ -156,11 +247,12 @@ func _centre_of(index: int) -> float:
 	return (segment_start(index).x + segment_end(index).x) * 0.5
 
 
-func _push(left: float, right: float, height: float) -> void:
+func _push(left: float, right: float, height: float, right_height: float = INF) -> void:
 	var slot: int = _written % MAX_SEGMENTS
 	_x0[slot] = left
 	_x1[slot] = maxf(right, left + 1.0)
-	_y[slot] = height
+	_y0[slot] = height
+	_y1[slot] = height if is_inf(right_height) else right_height
 	_written += 1
 
 
