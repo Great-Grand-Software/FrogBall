@@ -1,0 +1,54 @@
+name: Deploy Pages
+
+# Deploys this branch's contents as the Pages site.
+#
+# This lives on gh-pages rather than main on purpose. A push-triggered workflow
+# runs from the branch it was pushed to, so this works without anything landing
+# on the default branch first — which is the chicken-and-egg that stops the
+# template's own preview and deploy workflows from running on the first PR.
+#
+# It also removes the dependency on the Pages "Source" setting: with the GitHub
+# Actions source this IS the deploy path, and configure-pages will turn Pages
+# on via the API if it is currently off.
+
+on:
+  push:
+    branches: [gh-pages]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure Pages (enabling it if it is off)
+        uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
+      - name: Upload the site
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: .
+
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+      - name: Where it went
+        run: echo "Live at ${{ steps.deployment.outputs.page_url }}" >> "$GITHUB_STEP_SUMMARY"
